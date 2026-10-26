@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Private local options and state: never publish these.
+# The plugin stores recalled memory text and, with capture:true, pending
+# conversation text under stateDir (~/.local/state/magpie-openviking).
+options.local.json
+.state/
+*.json.lock
+*.tmp
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Logs
+*.log

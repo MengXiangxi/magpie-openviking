@@ -1,0 +1,38 @@
+{
+  "name": "magpie-openviking",
+  "version": "0.1.0",
+  "description": "OpenViking recall, stable context replay and opt-in conversation capture for Magpie async gateway hooks.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Xiangxi Meng",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MengXiangxi/magpie-openviking.git"
+  },
+  "homepage": "https://github.com/MengXiangxi/magpie-openviking#readme",
+  "bugs": {
+    "url": "https://github.com/MengXiangxi/magpie-openviking/issues"
+  },
+  "keywords": ["magpie-plugin", "magpie", "openviking", "memory", "gateway"],
+  "engines": { "node": ">=22" },
+  "files": ["hooks.mjs", "lib/", "cli.mjs", "README.md", "README.zh-CN.md", "LICENSE", "examples/", "docs/"],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:bun": "bun test test/",
+    "check": "node scripts/check.mjs"
+  },
+  "bin": {
+    "magpie-openviking": "./cli.mjs"
+  },
+  "magpie": {
+    "hooks": "./hooks.mjs",
+    "options": {
+      "enabled": true,
+      "capture": false,
+      "url": "http://127.0.0.1:1933",
+      "apiKeyEnv": "OPENVIKING_API_KEY",
+      "maxTokens": 1200,
+      "gatewayTimeoutMs": 3000
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "capture": false,
+  "url": "http://127.0.0.1:1933",
+  "apiKeyEnv": "OPENVIKING_API_KEY",
+  "maxTokens": 1200,
+  "timeoutMs": 1500,
+  "gatewayTimeoutMs": 3000
+}

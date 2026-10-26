@@ -1,0 +1,5 @@
+* text=auto eol=lf
+
+# Shell scripts must keep LF: a CRLF checkout breaks bash -n and the shebang.
+*.sh text eol=lf
+*.mjs text eol=lf
