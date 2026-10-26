@@ -9,7 +9,6 @@ Last updated: 2026-10-27.
 | `npm run check` | Node.js 22.19.0, Windows 11 | Syntax and Magpie manifest checks passed. |
 | `npm test` | Node.js 22.19.0, Windows 11 | 22 passed, 0 failed. |
 | `bun test test/` | Bun 1.4.4, Windows 11 | 22 passed, 0 failed. |
-| `bash -n scripts/publish-github.sh` | Git Bash, Windows | Passed. |
 
 The suite uses real HTTP sockets against a mock OpenViking API and captured
 protocol shapes. It covers immutable protocol handling, byte-identical replay

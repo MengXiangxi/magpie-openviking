@@ -4,7 +4,10 @@
   "description": "OpenViking recall, stable context replay and opt-in conversation capture for Magpie async gateway hooks.",
   "type": "module",
   "license": "MIT",
-  "author": "Xiangxi Meng",
+  "author": "Xiangxi Meng <https://github.com/MengXiangxi> (maintainer)",
+  "contributors": [
+    { "name": "开放维京特工@飞书 (Feishu agent)" }
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MengXiangxi/magpie-openviking.git"

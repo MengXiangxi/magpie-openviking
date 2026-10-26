@@ -2,6 +2,8 @@
 
 [English](README.md) · MIT · 实验版 v0.1.0
 
+由 **开放维京特工@飞书**（飞书智能体）开发 · 由 **[MengXiangxi](https://github.com/MengXiangxi)** 维护。
+
 **状态：** 召回已在真实 Magpie hook 宿主 + OpenViking Server v0.4.22 上跑通；**写入（capture）只做过接口 schema 对照，还没有任何一次真实写入验收**，详见 [docs/verification.md](docs/verification.md)。
 
 把 OpenViking 记忆召回放到 Magpie 的**异步网关 Hook**中。模型请求仍由 Magpie 直接发给上游，旁路调用 OpenViking Server 的检索和会话 API，不需要再串一个 OV 模型网关。
@@ -31,16 +33,24 @@ Agent → Magpie + 本插件 → 模型服务商
 
 安装后**必须真的存一次选项**（下面第二条命令，或在插件页保存同样的 JSON）。Magpie 插件页的开关和选项里的 `enabled` 是**两道独立的开关**，只开页面上那个、没有存选项时，插件状态会是 `skipped`。
 
+从 GitHub 安装，然后把选项存一次：
+
 ```sh
-npm run check
-npm test
-magpie plugin add /absolute/path/to/magpie-openviking
+magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
+```
+
+想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.1.0`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。
+
+本地开发时改为目录安装：先在源码目录跑 `npm run check` 和 `npm test`（或 `npm run test:bun`），然后：
+
+```sh
+magpie plugin add /absolute/path/to/magpie-openviking
 ```
 
 在启动 Magpie 前，通过操作系统环境或自己的凭据管理方式设置 `OPENVIKING_API_KEY`。使用个人 User/Admin Key，不使用 Root Key。桌面菜单启动的应用未必继承终端的 export，设置后需重启 Magpie。插件选项里只写环境变量**名称**，不要写 Key 本身。
 
-源码目录安装后要保留原目录，修改源码后切换插件或更改选项触发宿主重载。新开一个完整历史会话，在 Magpie 插件页观察 `ready/empty`；`unbound` 表示身份、会话或环境配置不足。
+目录安装是就地加载，要保留原目录，改源码后切换插件或改选项即可重载；GitHub 安装是 Magpie 自己维护的一份克隆，用 `magpie plugin update` 刷新。两种情况都不需要 npm install 或构建。新开一个完整历史会话，在 Magpie 插件页观察 `ready/empty`；`unbound` 表示身份、会话或环境配置不足。
 
 ## 开启记忆写入
 
@@ -76,17 +86,12 @@ worker 在 600 秒空闲后上传最后一个暂存回答；OV 收到消息后�
 - `uncertain` 表示消息写入结果不确定，该会话后续导出暂停。须先检查 OV 对应会话再人工处理本地条目，不要直接重发。`source_message_ids` 是来源信息，不是服务端幂等键。
 - 进程异常退出可能留下 `.lock`。先停止所有使用该目录的宿主/worker，再检查并清除陈旧锁；运行中的锁不能删除。
 
-## 发布为 GitHub 插件项目
+## 开发与维护
 
-在本目录初始化独立 Git 仓库，使用你自己的 Git 身份提交已审阅文件，在你自己的机器上完成 `gh auth login`，然后执行：
+- **开发：** 开放维京特工@飞书（飞书智能体）。
+- **维护、发布与 issue 处理：** [@MengXiangxi](https://github.com/MengXiangxi)。
 
-```sh
-bash scripts/publish-github.sh YOUR_ACCOUNT/magpie-openviking
-```
-
-脚本新建公开仓库、推送提交，并设置 `magpie-plugin` 等 **repository topics**。这里的 tag 指仓库主题，不是版本 Git tag。它提供 Magpie 社区发现入口，不表示已通过官方审核；旧版本是否支持此 Hook 要单独确认。
-
-没有 GitHub 认证和确定的目标账号时，项目仍只是本地源码，不能宣称已经发布。不要把 Token 发到群里。完整技术契约、选项和参考链接见 [README](README.md)。
+仓库 topics 里带 `magpie-plugin`，Magpie 靠这个 topic 在 GitHub 上发现社区插件。topic 只是发现入口，不代表审核或背书，旧版本 Magpie 是否支持这组 Hook 要单独确认。完整技术契约、选项和参考链接见 [英文 README](README.md)。
 
 ## 验证范围
 

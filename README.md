@@ -2,6 +2,8 @@
 
 [中文说明](README.zh-CN.md) · MIT · Experimental v0.1.0
 
+Developed by **开放维京特工@飞书** (a Feishu agent) · maintained by **[MengXiangxi](https://github.com/MengXiangxi)**.
+
 **Status:** recall is verified live against a Magpie hook host and an OpenViking Server v0.4.22. Capture is implemented and schema-checked but **not yet acceptance-tested against a live server** — see [docs/verification.md](docs/verification.md).
 
 OpenViking memory inside Magpie's **asynchronous gateway hooks**. Magpie still sends the model request directly to its selected provider; OpenViking Server is a side API for retrieval and optional conversation capture. An extra OpenViking model gateway is not required.
@@ -34,22 +36,28 @@ This is an independent community integration, not an official Magpie or OpenViki
 
 Automated verification covers protocol fixtures and real local HTTP requests to a mock OpenViking server, on Node and on Bun. **Recall** has also been verified live against a real Magpie host and a real OpenViking server. **Capture has not**: the write path is only checked against the server's OpenAPI schema, so no live server has ever received a captured turn from this plugin. Real model providers, memory extraction, prompt-cache hit rate and latency/cost impact remain unmeasured, and no performance claim is made. Details: [docs/verification.md](docs/verification.md).
 
-## Install locally
+## Install
 
-Download/clone this directory, then run:
+Install from GitHub, then save the options once:
 
 ```sh
-npm run check
-npm test
-magpie plugin add /absolute/path/to/magpie-openviking
+magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
+```
+
+Pin the release instead of tracking the default branch with `github:MengXiangxi/magpie-openviking#v0.1.0`; `magpie plugin update magpie-openviking` moves an unpinned install forward. There is no npm publication and no build step.
+
+For local development, install the checkout in place instead. Run `npm run check` and `npm test` (or `npm run test:bun`) first, then:
+
+```sh
+magpie plugin add /absolute/path/to/magpie-openviking
 ```
 
 Set `OPENVIKING_API_KEY` using your operating system's environment/secret facilities **before starting Magpie**, then restart Magpie so its Bun host inherits it. A shell export does not necessarily reach a desktop application launched from a menu. Never put the secret in this repository, plugin options, an issue or a chat. Options contain the **environment variable name**, not its value.
 
 The `magpie plugin options` line above is **not optional**: `package.json`'s `magpie.options` block is only a suggestion that `magpie plugin options <name>` prints, and Magpie never applies it by itself. There are also two independent switches — Magpie's per-plugin on/off toggle and `enabled` in these options. Both must be on; a plugin switched on in the GUI with no saved options reports `skipped`.
 
-Magpie loads source-folder plugins in place. Keep the folder present. Change options or toggle the plugin to reload source edits. An npm install/build step is unnecessary.
+A folder install is loaded in place, so keep the folder present and change options or toggle the plugin to pick up source edits. A GitHub install is a clone Magpie keeps and refreshes itself. An npm install/build step is unnecessary in both cases.
 
 Start a new complete-history chat. Magpie's Plugins page should report `ready` or `empty`. `unbound` usually means the credential/session is absent, or the request is not classified as a direct local request.
 
@@ -117,17 +125,12 @@ The worker waits for 600 seconds of inactivity before exporting the last unackno
 - Successful normal exports are locally deduplicated. This is not an exactly-once distributed delivery guarantee; losing local replay/outbox state loses that deduplication record.
 - Resetting/compacting client history creates a fresh replay scope. Editing content that was already exported cannot retract existing OV memories.
 
-## Publish to GitHub
+## Credits
 
-Review the code, tests and MIT license. Initialize a new Git repository in **this directory**, commit the reviewed files using your own Git identity, and authenticate GitHub CLI on your own machine. Then:
+- **Development:** 开放维京特工@飞书, a Feishu agent that designed and implemented this integration.
+- **Maintenance, releases and issues:** [@MengXiangxi](https://github.com/MengXiangxi).
 
-```sh
-bash scripts/publish-github.sh YOUR_ACCOUNT/magpie-openviking
-```
-
-The script creates a new **public** repository, pushes the reviewed commit, and sets repository topics `magpie-plugin`, `openviking`, `memory`, `llm-gateway`. `magpie-plugin` is a **GitHub repository topic**, not a Git version tag. It lets Magpie discover an eligible public repository; listing does not imply review, endorsement or guaranteed installation on older Magpie versions. The script refuses an existing `origin` instead of overwriting it.
-
-Publication requires credentials and the account/organization you choose. No credentials are bundled. This repository lives at <https://github.com/MengXiangxi/magpie-openviking>; forks should update `repository`, `homepage` and `bugs` in `package.json` together with the URLs above.
+Repository topics include `magpie-plugin`, which is how Magpie discovers community plugins on GitHub. A topic is not a review, an endorsement or a guarantee that an older Magpie build supports these hooks.
 
 ## References
 
