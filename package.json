@@ -18,7 +18,7 @@
   },
   "keywords": ["magpie-plugin", "magpie", "openviking", "memory", "gateway"],
   "engines": { "node": ">=22" },
-  "files": ["hooks.mjs", "lib/", "cli.mjs", "README.md", "README.zh-CN.md", "LICENSE", "examples/", "docs/"],
+  "files": ["index.js", "hooks.mjs", "lib/", "cli.mjs", "README.md", "README.zh-CN.md", "LICENSE", "examples/", "docs/"],
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:bun": "bun test test/",
