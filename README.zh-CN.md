@@ -128,7 +128,7 @@ node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--del
 - 检测到已有 `<openviking-context` 时跳过，避免与现有 OV 插件重复注入。包装标记只是展示边界，不是安全边界：召回文本属于不可信内容，匹配的包装标签会在注入前转义，但仍无法消除提示注入风险。
 - 未实现 MCP 工具注册、自动 Rule 调用、上下文压缩接管或隐藏工具执行循环。remember 是“确定性触发 + 普通写入”，不是工具：契约限制为一次客户端请求一次推理。
 - **`remembered` 只代表“已归档 + 已提交抽取任务”**。`POST /commit` 同步完成归档并返回 `task_id`，后台才决定创建/更新哪些记忆。不要据此向用户宣称“已经记住了”。
-- remember 事件在解决前会在本地保存语句原文（`awaiting`/`pending`/`sent`/`commit-pending`/`uncertain`）。`sent` 表示 append 期间崩溃、结果未知，永不自动 commit 或重发；`commit-pending` 只重试 commit（一次性会话无可归档内容时为 no-op）。用 `cli.mjs review` / `cli.mjs resolve` 人工协调。
+- remember 事件在解决前会在本地保存语句原文（`awaiting`/`pending`/`sent`/`commit-pending`/`uncertain`）。每轮的分类只保存“判定结果 + 事件 id”，语句本身从客户端历史重新推导，因此不会多留一份明文副本。`sent` 表示 append 期间崩溃、结果未知，永不自动 commit 或重发；`commit-pending` 只重试 commit（一次性会话无可归档内容时为 no-op）。用 `cli.mjs review` / `cli.mjs resolve` 人工协调。
 - 去重是“对话内”的：同一句话在两段不同对话里记住，会产生两个事件和两个独立的一次性会话。
 - `rememberIncludeAnswer` 与语句走同一套过滤：看起来含密钥的回答会被从载荷中剔除（`remember-answer-omitted`），不会落盘也不会上传。
 - 可见标记会留在客户端保存的助手消息里。用户删改它就会改变该条消息，导致该会话后续轮次重新召回一次。

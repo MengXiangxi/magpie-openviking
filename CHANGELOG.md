@@ -96,6 +96,16 @@ opt-in-path correctness fixes; the wire format, the option names and the default
 - Idle recovery uses a normalisation accepted earlier instead of falling back to
   the raw statement or dropping the event.
 
+### Retention and legacy payloads
+
+- A v0.2.0 event that already carried an answer is re-checked before it is sent,
+  so a legacy payload cannot bypass the answer privacy filter.
+- The per-turn classification no longer stores the statement text: it keeps the
+  decision and the event id, and the text is recomputed from the client history.
+  A delivered or dropped remember therefore leaves no second plaintext copy.
+- The 64-anchor bound is applied after every insertion path (accepted plans,
+  rejected commands and recovered continuations), not only for accepted plans.
+
 ### Upgrade note
 
 Receipts and session IDs written by v0.2.0 remain valid: their statement-only ids
@@ -105,7 +115,7 @@ because it is now conversation-scoped.
 
 ### Tests
 
-86 tests (25 new) cover the crash window, awaiting finalisation, idle fallback
+89 tests (28 new) cover the crash window, awaiting finalisation, idle fallback
 and drop, payload immutability after an attempted append, resolution guards,
 candidate release, tool continuations, answer privacy, conversation-scoped
 sessions, CLI opt-in and string Responses input. The capture-isolation test now

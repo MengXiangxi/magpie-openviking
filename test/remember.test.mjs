@@ -753,3 +753,47 @@ test('a candidate keeps the accepted normalisation across a marker-less callback
   await drain(x.options, { env });
   assert.match(x.batches[0].body.messages[0].content, /content: 用户偏好：默认用简体中文$/);
 });
+
+// --- fifth Copilot review (legacy answers, retention, bound) -------------
+
+test('a legacy event with a sensitive answer is filtered before it can be sent', async t => {
+  const x = await setup(t, { rememberIncludeAnswer: true });
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), x.context());
+  const file = join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const state = JSON.parse(await readFile(file, 'utf8'));
+  // v0.2.0 stored the answer without filtering it.
+  state.outbox[0].messages.push({ role: 'assistant', content: '好的，另外 password: hunter2' });
+  await writeFile(file, JSON.stringify(state));
+
+  const result = await drain(x.options, { env, now: () => Date.now() + 700_000 });
+  assert.equal(result.remembered, 1);
+  assert.equal(x.batches[0].body.messages.length, 1, 'the legacy answer is not exported');
+  assert.equal(JSON.stringify(x.batches[0].body).includes('hunter2'), false);
+});
+
+test('a delivered remember leaves no second copy of the statement on disk', async t => {
+  const x = await setup(t, { capture: false });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('好的'), ctx);
+  const [state] = await x.states();
+  const raw = JSON.stringify(state.rememberByAnchor);
+  assert.equal(raw.includes('以后都用中文回答'), false, 'only the decision and the event id are kept');
+  assert.equal(state.outbox.length, 0);
+  assert.equal(Object.values(state.rememberByAnchor).every(v => typeof v.authorized === 'boolean'), true);
+});
+
+test('the classification bound covers rejected commands and continuations too', async t => {
+  const x = await setup(t);
+  const ctx = x.context('/记住 password: hunter2');
+  await x.plugin.onRequest(x.body('/记住 password: hunter2'), ctx);
+  const file = join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const state = JSON.parse(await readFile(file, 'utf8'));
+  // Grow the map past the bound with entries a client could have produced.
+  for (let i = 0; i < 80; i++) state.rememberByAnchor[`f${String(i).padStart(63, '0')}`] = { authorized: false };
+  await writeFile(file, JSON.stringify(state));
+
+  await x.plugin.onRequest(x.body('/记住 password: hunter2'), x.context('/记住 password: hunter2'));
+  const [after] = await x.states();
+  assert.ok(Object.keys(after.rememberByAnchor).length <= 64, `bounded, got ${Object.keys(after.rememberByAnchor).length}`);
+});
