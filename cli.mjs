@@ -111,8 +111,12 @@ if (!['status', 'flush', 'remember', 'review', 'resolve', 'unlock'].includes(com
       } else if (command === 'review' || command === 'resolve') {
         if (command === 'review') console.log(JSON.stringify(await reviewRemembers(options), null, 2));
         else {
-          const changed = await resolveRemember(options, positional[1], resolution[0]);
-          console.log(JSON.stringify({ resolved: changed, resolution: resolution[0] }, null, 2));
+          const outcome = await resolveRemember(options, positional[1], resolution[0]);
+          console.log(JSON.stringify(outcome, null, 2));
+          if (!outcome.changed) {
+            console.error(`No change: ${outcome.reason}. Inspect the event with \`review\` first.`);
+            process.exitCode = 1;
+          }
         }
       } else {
         let running = true;
@@ -127,9 +131,13 @@ if (!['status', 'flush', 'remember', 'review', 'resolve', 'unlock'].includes(com
       }
     }
   } catch (error) {
-    console.error(error?.message === 'statement rejected'
-      ? 'Refused: the text looks like a secret or sensitive identifier.'
-      : 'Operation failed. Check the options, credential environment variable and local state permissions. No request content is printed.');
+    const known = {
+      'statement rejected': 'Refused: the text looks like a secret or sensitive identifier.',
+      'remember is off': 'Refused: remember is off in these options. Set "remember":"command" to allow explicit writes.',
+      'event not found': 'No remember event with that id in this state directory.',
+      'invalid resolution': 'Use exactly one of --approve, --retry or --delivered.'
+    }[error?.message];
+    console.error(known ?? 'Operation failed. Check the options, credential environment variable and local state permissions. No request content is printed.');
     process.exitCode = 1;
   }
 }

@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.2.1 — 2026-10-27
+
+Fixes thirteen issues raised in the Copilot review of #8. All are local-state or
+opt-in-path correctness fixes; the wire format, the option names and the default
+`remember: "off"` are unchanged.
+
+### Delivery state machine
+
+- A crash between the append checkpoint and the request now leaves `sent`, and
+  `sent` is never committed automatically. Committing an empty throw-away session
+  archived nothing but recorded a receipt, silently discarding the statement.
+- A confirmed append is persisted as `commit-pending` immediately, so a crash
+  after the append retries the commit instead of appending the messages twice.
+- New `awaiting` flag: when the model is asked to normalise the entry (or answer
+  context is requested) the payload is not final, and neither the completion
+  callback nor the worker may send the raw statement before finalisation. A lost
+  completion notification is finalised as the raw statement after `idleSeconds`,
+  or dropped when `rememberRawFallback` is off (counted as `rememberDropped`).
+- A retried response can no longer rewrite or delete an event whose append may
+  already have reached the server; only an unsent payload is finalisable.
+
+### Review and reconciliation
+
+- `resolve --approve` applies only to an unsent candidate; `--retry` applies only
+  to `sent`/`uncertain` events. A confirmed append keeps commit-only retry
+  semantics, so no resolution can trigger a second append. Each refusal now
+  explains itself and exits non-zero.
+
+### Triggers and scope
+
+- A client tool continuation keeps the turn's remember classification, so its
+  marker is still authorised and a rejected sensitive command is still excluded
+  from capture.
+- An explicit `/remember` releases a candidate that an assisted pattern queued
+  for the same statement, instead of still demanding CLI approval.
+- The throw-away OpenViking session is now conversation-scoped, so two
+  conversations can no longer append to one session under separate locks.
+  Deduplication was always conversation-local and is now documented as such.
+- The CLI write now requires a non-`off` `remember` mode, matching the documented
+  opt-in, and uses a per-invocation session.
+
+### Privacy and i18n
+
+- `rememberIncludeAnswer` no longer exports a sensitive answer: the same filter
+  that guards the statement now guards the answer, which is omitted
+  (`remember-answer-omitted`) instead of persisted.
+- Answer context is included even when `rememberModel` is `off`.
+- The candidate instruction no longer tells the user an entry was submitted when
+  it is waiting for approval.
+- A Responses request whose `input` is a bare string no longer loses the
+  instruction.
+
+### Tests
+
+74 tests (13 new) cover the crash window, awaiting finalisation, idle fallback
+and drop, payload immutability after an attempted append, resolution guards,
+candidate release, tool continuations, answer privacy, conversation-scoped
+sessions, CLI opt-in and string Responses input. The capture-isolation test now
+also proves that ordinary turns are still exported.
+
 ## v0.2.0 — 2026-10-27
 
 Adds explicit `remember` to the gateway-hook mode. Everything is opt-in:

@@ -7,8 +7,8 @@ Last updated: 2026-10-27.
 | Check | Environment | Result |
 | --- | --- | --- |
 | `npm run check` | Node.js 24.12.0, Windows 11 | Syntax and Magpie manifest checks passed. |
-| `npm test` | Node.js 24.12.0, Windows 11 | 61 passed, 0 failed. |
-| `bun test test/` | Bun 1.4.4, Windows 11 | 61 passed, 0 failed. |
+| `npm test` | Node.js 24.12.0, Windows 11 | 74 passed, 0 failed. |
+| `bun test test/` | Bun 1.4.4, Windows 11 | 74 passed, 0 failed. |
 
 The suite uses real HTTP sockets against a mock OpenViking API and captured
 protocol shapes. It covers immutable protocol handling, byte-identical replay
@@ -18,7 +18,7 @@ exclusive locks and stale-lock recovery, transient filesystem retries, lazy
 state pruning, timeout and redirect behaviour, capture acknowledgement and
 mismatch reporting, regeneration, idle draining and ambiguous-write suppression.
 
-Remember coverage (`test/remember.test.mjs`, 21 tests): command and bare-command
+Remember coverage (`test/remember.test.mjs`, 34 tests): command and bare-command
 detection with a previous-turn fallback, anchored-pattern candidates, secret and
 sensitive-identifier refusal, an assertion that the injected control instruction
 contains no CJK (the English-only i18n guard), wrapper-escape of untrusted text,
@@ -27,7 +27,7 @@ the locale-neutral payload header, one throw-away session per statement, no reca
 and no capture on a remember turn, content deduplication, request retries that
 keep a single event, model normalisation and raw fallback, uncertain-append
 suppression, commit-only retry, candidate approval through the CLI, the
-context-free `cli.mjs remember` write, stray-marker reporting, and the budget hint.
+context-free `cli.mjs remember` write, stray-marker reporting, and the budget hint. Review regressions add the crash window (`sent` is never committed), `awaiting` finalisation and idle fallback/drop, payload immutability after an attempted append, resolution guards, candidate release by an explicit command, tool-continuation classification, answer-context privacy, conversation-scoped sessions, CLI opt-in and string Responses input; the capture-isolation test now also proves that ordinary turns are still exported.
 
 One assertion in `test/integration.test.mjs` checks that state files are created
 `0600`. Windows has no POSIX mode bits (Node and Bun both report `0o666`), so it

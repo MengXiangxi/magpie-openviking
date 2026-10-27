@@ -34,13 +34,29 @@ implemented as a deterministic trigger plus an ordinary write:
    signal independent of the finished reply: `POST /sessions/{id}/messages/batch`
    on a throw-away session, then `POST /sessions/{id}/commit` with
    `keep_recent_count: 0`. Remember has its own per-request bound
-   (`rememberTimeoutMs`) because it is two requests in one hook.
-5. A state is therefore not capture's binary checkpoint. `pending` has not been
-   sent; `sent` means the append outcome is unknown and is never resent;
-   `commit-pending` means the append is confirmed and only the commit failed, so
-   retrying the commit alone is safe. `uncertain` and `commit-pending` are only
-   reconciled by an explicit CLI statement, matching the existing rule that the
-   plugin never guesses about a non-idempotent write.
+   (`rememberTimeoutMs`) because it is two requests in one hook. The throw-away
+   session is namespaced by conversation, because receipts and locks are
+   per-conversation: a statement-keyed session shared by two conversations would
+   let both append under separate locks and interleave commits.
+5. Delivery is a four-state machine plus an `awaiting` flag, because a payload is
+   not always final when the trigger fires (the model may be asked to normalise
+   it, or the answer context is still missing):
+   - `awaiting` - not final, never sent. Sending the raw statement here would
+     bypass `rememberRawFallback: false`. The worker finalises it as the raw
+     statement after `idleSeconds`, or drops it when the fallback is disabled.
+   - `pending` - nothing attempted.
+   - `sent` - the append was started and the process stopped before the outcome
+     was recorded. Unknown, so it is never committed or resent: committing an
+     empty throw-away session archives nothing but would report the statement as
+     remembered.
+   - `commit-pending` - the append is confirmed (persisted before the commit
+     attempt) and only the commit failed, so retrying the commit alone is safe.
+   - `uncertain` - the append itself may have landed.
+   Only `pending` and `commit-pending` reach a commit. A payload is rewriteable
+   only while it is unsent, so a regenerated answer cannot desynchronise local
+   state from a session that may already hold the old text. `sent`, `uncertain`
+   and `commit-pending` are reconciled only by an explicit CLI statement, which
+   is also the only way to assert that an append did not land.
 
 The model may normalise an entry, never authorise one. With
 `rememberModel: "normalize"` the plugin appends one English instruction to the

@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createPlugin, drain, rememberId, rememberNow, resolveRemember, reviewRemembers } from '../lib/plugin.mjs';
+import { createPlugin, drain, rememberNow, resolveRemember, reviewRemembers } from '../lib/plugin.mjs';
 import { configuration } from '../lib/config.mjs';
 import { detect, redactReason, normalizePrompt, parseRemember, escapeUntrusted, buildMessages } from '../lib/remember.mjs';
 
@@ -195,15 +195,31 @@ test('a retried request keeps one event and still stores the normalised version'
 test('capture never exports the same turn that was remembered', async t => {
   const x = await setup(t, { capture: true });
   const first = x.body('/记住 以后都用中文回答');
-  const firstCtx = x.context();
+  const firstCtx = x.context(); firstCtx.success = true;
   await x.plugin.onRequest(first, firstCtx);
   await x.plugin.onResponse(x.reply('好的'), firstCtx);
-  // Next complete history acknowledges the previous answer the way a client would.
-  const second = { ...first, messages: [...first.messages, { role: 'assistant', content: '好的' }, { role: 'user', content: '继续' }] };
-  await x.plugin.onRequest(second, x.context('继续'));
-  const captureBatches = x.batches.filter(b => !b.path.includes('magpie-remember'));
-  assert.equal(captureBatches.length, 0, 'no conversation export for a remembered turn');
+  let [state] = await x.states();
+  assert.equal(state.candidate, null, 'a remember turn never becomes a capture candidate');
+  // The next complete history acknowledges the answer, which is exactly what would
+  // export a candidate for an ordinary turn.
+  const history = { ...first, messages: [...first.messages, { role: 'assistant', content: '好的' }, { role: 'user', content: '继续' }] };
+  const ctx2 = x.context('继续'); ctx2.success = true;
+  await x.plugin.onRequest(history, ctx2);
+  await x.plugin.onResponse(x.reply('继续的回答'), ctx2);
+  assert.equal(x.batches.filter(b => !b.path.includes('magpie-remember')).length, 0);
   assert.equal(x.batches.filter(b => b.path.includes('magpie-remember')).length, 1);
+
+  // Control: the same flow without a remember command does export, so this test
+  // would fail if remember suppression stopped working.
+  const plain = x.body('Question');
+  const plainCtx = x.context('Question', { session: 'session-plain' }); plainCtx.success = true;
+  await x.plugin.onRequest(plain, plainCtx);
+  await x.plugin.onResponse(x.reply('Answer'), plainCtx);
+  const acknowledged = { ...plain, messages: [...plain.messages, { role: 'assistant', content: 'Answer' }, { role: 'user', content: '继续' }] };
+  const plainCtx2 = x.context('继续', { session: 'session-plain' }); plainCtx2.success = true;
+  await x.plugin.onRequest(acknowledged, plainCtx2);
+  await x.plugin.onResponse(x.reply('另一条回答'), plainCtx2);
+  assert.equal(x.batches.filter(b => !b.path.includes('magpie-remember')).length, 1, 'ordinary turns are still captured');
 });
 
 test('normalize mode injects an English instruction and stores the model version', async t => {
@@ -327,4 +343,190 @@ test('a timeout budget too small for two useful requests is reported instead of 
   const ctx = x.context();
   await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
   assert.ok(x.reports.includes('remember-timeout'));
+});
+
+// --- review regressions -------------------------------------------------
+
+test('an append interrupted before its outcome was recorded is never committed', async t => {
+  const x = await setup(t);
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  // Simulate a crash after the append checkpoint was written but before the
+  // request was issued: status 'sent' with nothing on the server.
+  const [name] = (await readdir(x.directory)).filter(n => n.endsWith('.json'));
+  const file = join(x.directory, name);
+  const state = JSON.parse(await readFile(file, 'utf8'));
+  state.outbox[0].status = 'sent';
+  await writeFile(file, JSON.stringify(state));
+
+  const drained = await drain(x.options, { env });
+  assert.equal(x.batches.length, 0, 'an empty session must not be committed as if the write succeeded');
+  assert.equal(x.commits.length, 0);
+  assert.equal(drained.remembered, 0);
+  assert.equal(drained.rememberUncertain, 1, 'it is reported as unresolved instead');
+  const after = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(after.outbox[0].status, 'sent');
+});
+
+test('an awaiting payload is never sent before the completion callback finalises it', async t => {
+  const x = await setup(t, { rememberModel: 'normalize' });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  await drain(x.options, { env });
+  assert.equal(x.batches.length, 0, 'the raw statement must not race the normalised payload');
+
+  await x.plugin.onResponse(x.reply('已提交。\n/remember 用户偏好：默认用中文回答'), ctx);
+  assert.equal(x.batches.length, 1);
+  assert.match(x.batches[0].body.messages[0].content, /content: 用户偏好：默认用中文回答$/);
+});
+
+test('a lost completion notification falls back after the idle window, or drops without it', async t => {
+  const idle = () => Date.now() + 700_000;
+  const fallback = await setup(t, { rememberModel: 'normalize' });
+  await fallback.plugin.onRequest(fallback.body('/记住 以后都用中文回答'), fallback.context());
+  assert.equal((await drain(fallback.options, { env, now: idle })).remembered, 1, 'the raw statement is the documented fallback');
+  assert.match(fallback.batches[0].body.messages[0].content, /content: 以后都用中文回答$/);
+
+  const strict = await setup(t, { rememberModel: 'normalize', rememberRawFallback: false });
+  await strict.plugin.onRequest(strict.body('/记住 以后都用中文回答'), strict.context());
+  const result = await drain(strict.options, { env, now: idle });
+  assert.equal(strict.batches.length, 0);
+  assert.equal(result.rememberDropped, 1);
+});
+
+test('a retried response cannot rewrite or delete an event that may already be on the server', async t => {
+  const x = await setup(t, { rememberModel: 'normalize' });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  x.control.dropBatch = true;
+  await x.plugin.onResponse(x.reply('好的\n/remember 用户偏好：中文'), ctx);
+  let [state] = await x.states();
+  assert.equal(state.outbox[0].status, 'uncertain');
+  const sentMessages = JSON.stringify(state.outbox[0].messages);
+
+  // A second completion callback (regeneration) must not swap the payload or drop it.
+  x.control.dropBatch = false;
+  const again = { ...ctx, state: structuredClone(ctx.state) };
+  await x.plugin.onResponse(x.reply('重答\n/remember 完全不同的一条'), again);
+  [state] = await x.states();
+  assert.equal(state.outbox.length, 1);
+  assert.equal(JSON.stringify(state.outbox[0].messages), sentMessages, 'the local payload is unchanged');
+});
+
+test('resolving never re-appends a confirmed event', async t => {
+  const x = await setup(t);
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  x.control.failCommit = true;
+  await x.plugin.onResponse(x.reply('好的'), ctx);
+  let [state] = await x.states();
+  assert.equal(state.outbox[0].status, 'commit-pending');
+
+  const retried = await resolveRemember(x.options, state.outbox[0].id, 'retry', { env });
+  assert.equal(retried.changed, false);
+  assert.match(retried.reason, /commit is retried/);
+
+  const approved = await resolveRemember(x.options, state.outbox[0].id, 'approve', { env });
+  assert.equal(approved.changed, false, 'approval only applies to an unsent candidate');
+  [state] = await x.states();
+  assert.equal(state.outbox[0].status, 'commit-pending');
+  assert.equal(x.batches.length, 1);
+});
+
+test('an explicit command releases a candidate that a pattern had queued', async t => {
+  const x = await setup(t, { remember: 'assisted' });
+  await x.plugin.onRequest(x.body('以后都用中文回答'), x.context('以后都用中文回答'));
+  let [state] = await x.states();
+  assert.equal(state.outbox[0].needsConfirm, true);
+
+  const ctx = x.context('/记住 以后都用中文回答');
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  [state] = await x.states();
+  assert.equal(state.outbox.length, 1, 'the same statement keeps one event');
+  assert.equal(state.outbox[0].needsConfirm, false, 'an explicit command no longer needs approval');
+  await drain(x.options, { env });
+  assert.equal(x.batches.length, 1);
+});
+
+test('a client tool continuation keeps the turn classification and its capture exclusion', async t => {
+  const x = await setup(t, { capture: true, rememberModel: 'normalize' });
+  const command = x.body('/记住 以后都用中文回答');
+  const firstCtx = x.context(); firstCtx.success = true;
+  await x.plugin.onRequest(command, firstCtx);
+
+  // The client asks for a tool, so the continuation is not a new user request.
+  const continuation = {
+    ...command,
+    messages: [
+      ...command.messages,
+      { role: 'assistant', content: '调用工具', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'tool output' }
+    ]
+  };
+  const ctx = x.context(); ctx.success = true;
+  const upstream = await x.plugin.onRequest(continuation, ctx);
+  assert.match(upstream.messages[0].content, /<openviking-remember>/, 'the instruction is still injected');
+  assert.equal(ctx.state.openviking.user, '', 'the command text is still excluded from capture');
+
+  await x.plugin.onResponse(x.reply('好的\n/remember 用户偏好：中文'), ctx);
+  assert.equal(x.batches.filter(b => b.path.includes('magpie-remember')).length, 1);
+  assert.equal(x.batches.filter(b => !b.path.includes('magpie-remember')).length, 0);
+  assert.ok(!x.reports.includes('remember-unrequested'));
+});
+
+test('a sensitive answer is never attached as remember context', async t => {
+  const x = await setup(t, { rememberIncludeAnswer: true });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('好的，已提交。顺便记下 password: hunter2'), ctx);
+  assert.equal(x.batches.length, 1);
+  assert.equal(x.batches[0].body.messages.length, 1, 'the assistant context is omitted');
+  assert.ok(x.reports.includes('remember-answer-omitted'));
+});
+
+test('answer context is included even without model normalisation', async t => {
+  const x = await setup(t, { rememberIncludeAnswer: true });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('好的，我记下了。'), ctx);
+  assert.equal(x.batches.length, 1);
+  assert.equal(x.batches[0].body.messages.length, 2);
+  assert.equal(x.batches[0].body.messages[1].role, 'assistant');
+});
+
+test('two conversations never share one remember session', async t => {
+  const x = await setup(t);
+  for (const session of ['session-a', 'session-b']) {
+    const ctx = x.context('/记住 以后都用中文回答', { session });
+    await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+    await x.plugin.onResponse(x.reply('好的'), ctx);
+  }
+  assert.equal(x.batches.length, 2);
+  assert.notEqual(x.batches[0].path, x.batches[1].path, 'the throw-away session is conversation-scoped');
+});
+
+test('the CLI write requires an explicit remember mode', async t => {
+  const x = await setup(t, { remember: 'off' });
+  await assert.rejects(() => rememberNow(x.options, '以后都用中文回答', { env }), /remember is off/);
+  assert.equal(x.batches.length, 0);
+});
+
+test('a Responses string input still receives the instruction', async t => {
+  const x = await setup(t, { rememberModel: 'normalize' });
+  const ctx = x.context('', { protocol: 'responses' });
+  const body = { model: 'test/model', stream: true, input: '/记住 以后都用中文回答' };
+  const upstream = await x.plugin.onRequest(body, ctx);
+  assert.ok(Array.isArray(upstream.input), 'string input is normalised to an item array');
+  const content = upstream.input[0].content;
+  const flat = typeof content === 'string' ? content : content.map(p => p.text).join('');
+  assert.match(flat, /<openviking-remember>/);
+  assert.equal(body.input, '/记住 以后都用中文回答', 'the client body is untouched');
+});
+
+test('a candidate instruction does not claim the entry was submitted', async t => {
+  const x = await setup(t, { remember: 'assisted', rememberModel: 'normalize' });
+  const upstream = await x.plugin.onRequest(x.body('以后都用中文回答'), x.context('以后都用中文回答'));
+  const injected = upstream.messages[0].content;
+  assert.match(injected, /still needs their approval/);
+  assert.equal(/was submitted to long-term memory/.test(injected), false);
 });

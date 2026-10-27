@@ -1,6 +1,6 @@
 # magpie-openviking
 
-[English](README.md) · MIT · 实验版 v0.2.0
+[English](README.md) · MIT · 实验版 v0.2.1
 
 由 **开放维京特工@飞书**（飞书智能体）开发 · 由 **[MengXiangxi](https://github.com/MengXiangxi)** 维护。
 
@@ -41,7 +41,7 @@ magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
 ```
 
-想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.2.0`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。从 v0.1.x 升级不需要迁移：`remember` 默认 `off`，状态文件在首次加载时自动补齐回执列表。见 [CHANGELOG.md](CHANGELOG.md)。
+想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.2.1`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。从 v0.1.x 升级不需要迁移：`remember` 默认 `off`，状态文件在首次加载时自动补齐回执列表。见 [CHANGELOG.md](CHANGELOG.md)。
 
 本地开发时改为目录安装：先在源码目录跑 `npm run check` 和 `npm test`（或 `npm run test:bun`），然后：
 
@@ -94,7 +94,9 @@ magpie plugin options magpie-openviking '{"enabled":true,"remember":"command","u
 | 固定句式（`以后都…`、`记住：…`） | `remember:"assisted"` | 只入队为候选，需 `cli.mjs resolve … --approve` |
 | `cli.mjs remember --text` | 任意非 `off` 值 | 不依赖会话状态的显式写入 |
 
-只有用户自己的消息能授权写入，模型永远不决定“是否写”。remember 回合既不召回，也不会被对话捕获重复写入。每条语句使用独立的一次性会话（`magpie-remember-…`），以 `keep_recent_count: 0` 提交，抽取范围就只有这一条。
+只有用户自己的消息能授权写入，模型永远不决定“是否写”。remember 回合既不召回，也不会被对话捕获重复写入。每条语句使用独立的一次性会话、且会话按“发起它的那段对话”命名空间（不再跨对话共享），以 `keep_recent_count: 0` 提交，抽取范围就只有这一条。
+
+投递状态有四态加一个 `awaiting` 标志：`awaiting`（载荷未定稿——模型被要求规范化，或还缺回答上下文——因此绝不发送）、`pending`（尚未尝试）、`sent`（append 期间崩溃，结果未知，永不自动 commit 或重发）、`commit-pending`（append 已确认，只有 commit 失败）、`uncertain`（append 可能已落库）。只有 `pending` 或 `commit-pending` 会走到 commit，因此不可能把一个空会话归档后当成写入成功。
 
 ### 让模型规范化内容
 
@@ -117,7 +119,7 @@ node cli.mjs review   /abs/options.local.json               # 只列标签/状�
 node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--delivered
 ```
 
-`--approve` 放行候选，`--retry` 表示人工确认“未写入、可重试”，`--delivered` 表示确认“已写入”。插件自己永不改变这两种状态：`sent` 不自动重发，`commit-pending` 只重试 commit。
+`--approve` 只放行从未发送过的候选，`--retry` 只用于 `sent`/`uncertain`（人工确认 append 没落库），`--delivered` 表示确认已落库。对已确认的 append 执行 approve、或对 `commit-pending` 执行 retry 都会被拒绝并说明原因，因为二者都可能触发第二次 append。CLI 写入本身也要求 `remember` 不是 `off`，即同一套开关约束这条路径，且每次调用使用独立会话。
 
 ## 使用范围
 
@@ -126,7 +128,9 @@ node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--del
 - 检测到已有 `<openviking-context` 时跳过，避免与现有 OV 插件重复注入。包装标记只是展示边界，不是安全边界：召回文本属于不可信内容，匹配的包装标签会在注入前转义，但仍无法消除提示注入风险。
 - 未实现 MCP 工具注册、自动 Rule 调用、上下文压缩接管或隐藏工具执行循环。remember 是“确定性触发 + 普通写入”，不是工具：契约限制为一次客户端请求一次推理。
 - **`remembered` 只代表“已归档 + 已提交抽取任务”**。`POST /commit` 同步完成归档并返回 `task_id`，后台才决定创建/更新哪些记忆。不要据此向用户宣称“已经记住了”。
-- remember 事件在解决前会在本地保存语句原文（`pending`/`sent`/`commit-pending`/`uncertain`）。`sent` 表示 append 结果未知，永不自动重发；`commit-pending` 只重试 commit（一次性会话无可归档内容时为 no-op）。用 `cli.mjs review` / `cli.mjs resolve` 人工协调。
+- remember 事件在解决前会在本地保存语句原文（`awaiting`/`pending`/`sent`/`commit-pending`/`uncertain`）。`sent` 表示 append 期间崩溃、结果未知，永不自动 commit 或重发；`commit-pending` 只重试 commit（一次性会话无可归档内容时为 no-op）。用 `cli.mjs review` / `cli.mjs resolve` 人工协调。
+- 去重是“对话内”的：同一句话在两段不同对话里记住，会产生两个事件和两个独立的一次性会话。
+- `rememberIncludeAnswer` 与语句走同一套过滤：看起来含密钥的回答会被从载荷中剔除（`remember-answer-omitted`），不会落盘也不会上传。
 - 可见标记会留在客户端保存的助手消息里。用户删改它就会改变该条消息，导致该会话后续轮次重新召回一次。
 - **模型自主触发（`propose`）和带外抽取器（不靠用户句式决定“值不值得记”）尚未实现。** 目前触发词是显式指令加固定句式，所以指令表可配置。
 - 新状态文件在 POSIX 上使用 0600、目录 0700；**Windows 无法设置 POSIX 权限位**，只能依赖用户目录 ACL。召回文本、待发送对话保存在本地私有状态目录中，插件本身不加密，请勿上传 GitHub。完整选项和数据说明见 [英文 README](README.md)。
