@@ -52,6 +52,13 @@ opt-in-path correctness fixes; the wire format, the option names and the default
 - A Responses request whose `input` is a bare string no longer loses the
   instruction.
 
+### Upgrade note
+
+Receipts and session IDs written by v0.2.0 are keyed by the statement alone. They
+remain readable, but the same statement repeated after upgrading is written once
+more before the new conversation-scoped receipts apply. Nothing else changes: the
+state file version is unchanged and no migration step is required.
+
 ### Tests
 
 74 tests (13 new) cover the crash window, awaiting finalisation, idle fallback
