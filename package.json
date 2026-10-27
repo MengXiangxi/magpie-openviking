@@ -1,7 +1,7 @@
 {
   "name": "magpie-openviking",
-  "version": "0.1.1",
-  "description": "OpenViking recall, stable context replay and opt-in conversation capture for Magpie async gateway hooks.",
+  "version": "0.2.0",
+  "description": "OpenViking recall, stable context replay, opt-in conversation capture and explicit remember for Magpie async gateway hooks.",
   "type": "module",
   "license": "MIT",
   "author": "Xiangxi Meng <https://github.com/MengXiangxi> (maintainer)",
@@ -53,6 +53,7 @@
     "options": {
       "enabled": true,
       "capture": false,
+      "remember": "off",
       "url": "http://127.0.0.1:1933",
       "apiKeyEnv": "OPENVIKING_API_KEY",
       "maxTokens": 1200,

@@ -23,6 +23,7 @@ Agent → Magpie + 本插件 → 模型服务商
 - 对话捕获默认关闭，开启后只保存原始用户文本和最终可见回答，不保存注入内容、工具流量、思考或图片。
 - 回答先暂存，后续客户端历史确认保留后才入队；重新生成会替换尚未确认的回答。
 - 可选 worker 处理最后一个空闲回合和已入队的未发送内容。发送结果不确定时停止重发，避免盲目重复写入。
+- 可选**显式记忆写入**：用户自己消息里的 `/remember`、`/记住` 指令（或 `assisted` 模式的固定句式）会写一个一次性会话并提交抽取。由规则决定“是否写”，模型最多只决定“写什么”。
 - 零运行时 npm 依赖，MIT 开源。属于独立社区项目，不代表两边官方发布。
 
 ## 安装与首次验证
@@ -76,12 +77,58 @@ node cli.mjs flush /absolute/path/options.local.json --watch
 
 worker 在 600 秒空闲后上传最后一个暂存回答；OV 收到消息后才开始自己的空闲计时，因此最后一轮提取可能需要两个等待周期加处理时间。不跑 worker 时，最后一轮等待下一次客户端请求确认。Magpie 完成通知本身是尽力投递，未到达本插件的通知无法凭空恢复。
 
+## 显式记忆写入（remember）
+
+> **尚未在真实服务端验收。** 写入路径（`POST /sessions/{id}/messages/batch`、`POST /sessions/{id}/commit` 和服务端抽取）只对 mock server 与 OpenAPI schema 做过核对。请先用一次性账号试，再用 `ov session ...` 检查会话。
+
+Magpie 的 Hook 不能注册工具、也不能跑第二轮推理，所以 remember 不是工具调用，而是“用户自己消息上的确定性触发 + 完成回调里的两次普通写入”。完成回调有独立于已结束请求的超时信号，因此不占用户看到的回复延迟。
+
+```sh
+magpie plugin options magpie-openviking '{"enabled":true,"remember":"command","url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
+```
+
+| 触发 | 开启方式 | 行为 |
+| --- | --- | --- |
+| `/remember 文本` 或 `/记住 文本` | `remember:"command"` | 直接写入，不需确认 |
+| 单独一个 `/remember` | `remember:"command"` | 记住上一条用户消息 |
+| 固定句式（`以后都…`、`记住：…`） | `remember:"assisted"` | 只入队为候选，需 `cli.mjs resolve … --approve` |
+| `cli.mjs remember --text` | 任意非 `off` 值 | 不依赖会话状态的显式写入 |
+
+只有用户自己的消息能授权写入，模型永远不决定“是否写”。remember 回合既不召回，也不会被对话捕获重复写入。每条语句使用独立的一次性会话（`magpie-remember-…`），以 `keep_recent_count: 0` 提交，抽取范围就只有这一条。
+
+### 让模型规范化内容
+
+设置 `rememberModel:"normalize"` 后，插件只往**发往上游的请求**里追加一段**英文**指令（不进入客户端历史，回放锚点保持字节稳定）。模型改写后的条目放在回复末尾的机读标记里，插件解析后再过一次同样的隐私检查；模型不配合时回退到用户原话（`rememberRawFallback`，默认开启）。
+
+控制指令固定用英文，是为了一种文案适配所有语言；条目本身保持用户原语言、不翻译，而“已提交”那句话要求模型**用用户当前语言**说。
+
+| `rememberMarker` | 标记形式 | 用户可见性 |
+| --- | --- | --- |
+| `comment`（默认） | `<!-- openviking-remember … -->` | Markdown 渲染下不可见，终端客户端可见 |
+| `line` | 末行 `/remember …` | 始终可见 |
+
+标记只在**同一轮已通过确定性触发**时才被接受（否则报 `remember-unrequested`），因此即使提示注入让模型吐出标记，也写不进记忆。工具调用中间步骤同样会被解析，因为标记不等于最终回答。
+
+### 复核与协调
+
+```sh
+node cli.mjs remember /abs/options.local.json --text "…"   # 显式写入，不建会话状态
+node cli.mjs review   /abs/options.local.json               # 只列标签/状态/时长，不打印正文
+node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--delivered
+```
+
+`--approve` 放行候选，`--retry` 表示人工确认“未写入、可重试”，`--delivered` 表示确认“已写入”。插件自己永不改变这两种状态：`sent` 不自动重发，`commit-pending` 只重试 commit。
+
 ## 使用范围
 
 - 首版只支持单人直连本机的请求。共享 Key、远程、转发或无法确认来源的请求保持原样，不将会话标签当作用户身份。
 - Responses 的 `previous_response_id` 或服务端 `conversation` 模式跳过，需要完整历史才能稳定回放。
 - 检测到已有 `<openviking-context` 时跳过，避免与现有 OV 插件重复注入。包装标记只是展示边界，不是安全边界：召回文本属于不可信内容，匹配的包装标签会在注入前转义，但仍无法消除提示注入风险。
-- 未实现 MCP 工具注册、自动 Rule 调用、上下文压缩接管或隐藏工具执行循环。
+- 未实现 MCP 工具注册、自动 Rule 调用、上下文压缩接管或隐藏工具执行循环。remember 是“确定性触发 + 普通写入”，不是工具：契约限制为一次客户端请求一次推理。
+- **`remembered` 只代表“已归档 + 已提交抽取任务”**。`POST /commit` 同步完成归档并返回 `task_id`，后台才决定创建/更新哪些记忆。不要据此向用户宣称“已经记住了”。
+- remember 事件在解决前会在本地保存语句原文（`pending`/`sent`/`commit-pending`/`uncertain`）。`sent` 表示 append 结果未知，永不自动重发；`commit-pending` 只重试 commit（一次性会话无可归档内容时为 no-op）。用 `cli.mjs review` / `cli.mjs resolve` 人工协调。
+- 可见标记会留在客户端保存的助手消息里。用户删改它就会改变该条消息，导致该会话后续轮次重新召回一次。
+- **模型自主触发（`propose`）和带外抽取器（不靠用户句式决定“值不值得记”）尚未实现。** 目前触发词是显式指令加固定句式，所以指令表可配置。
 - 新状态文件在 POSIX 上使用 0600、目录 0700；**Windows 无法设置 POSIX 权限位**，只能依赖用户目录 ACL。召回文本、待发送对话保存在本地私有状态目录中，插件本身不加密，请勿上传 GitHub。完整选项和数据说明见 [英文 README](README.md)。
 - **worker 与请求路径上每小时最多一次的惰性清理会删除过期状态。** 有暂存回答或未解决 outbox 条目的状态会保留。要清空请先停掉所有使用该目录的宿主与 worker，再删除目录。
 - 请求超时/检索失败时保留主请求；缓存命中和延迟收益需要真实环境验证，没有宣称性能提高比例。
@@ -97,4 +144,4 @@ worker 在 600 秒空闲后上传最后一个暂存回答；OV 收到消息后�
 
 ## 验证范围
 
-提供协议单元测试和真实本地 HTTP mock 集成测试（Node 与 Bun 均 40/40 通过），覆盖回放裁剪、重试、超时推导、身份隔离、确认后捕获、重新生成、空闲处理、锁回收和不确定写入；召回已在真实 Magpie + OpenViking v0.4.22 上验证，**写入路径尚未验收**。GitHub Actions 在 Linux/macOS/Windows、Node 22/24 与 Bun 上跑同一套测试。
+提供协议单元测试和真实本地 HTTP mock 集成测试（Node 与 Bun 均 59/59 通过），覆盖回放裁剪、重试、超时推导、身份隔离、确认后捕获、重新生成、空闲处理、锁回收、不确定写入，以及 remember 的命令/句式识别、隐私过滤、模型规范化与回退、去重、与捕获互斥、commit 单独重试。召回已在真实 Magpie + OpenViking v0.4.22 上验证，**捕获与 remember 的写入路径尚未在真实服务端验收**。GitHub Actions 在 Linux/macOS/Windows、Node 22/24 与 Bun 上跑同一套测试。

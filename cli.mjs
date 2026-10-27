@@ -3,26 +3,82 @@ import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { configuration, stateDirectory } from './lib/config.mjs';
 import { Store, unlockStale } from './lib/store.mjs';
-import { drain } from './lib/plugin.mjs';
+import { drain, rememberNow, resolveRemember, reviewRemembers } from './lib/plugin.mjs';
+
+const USAGE = [
+  'Usage: node cli.mjs status /absolute/path/options.local.json [--watch]',
+  '       node cli.mjs flush /absolute/path/options.local.json [--watch]',
+  '       node cli.mjs remember /absolute/path/options.local.json --text "..." | --file path',
+  '       node cli.mjs review /absolute/path/options.local.json',
+  '       node cli.mjs resolve /absolute/path/options.local.json <event-id> --approve|--retry|--delivered',
+  '       node cli.mjs unlock [--force] [/absolute/path/options.local.json] [state-id]'
+].join('\n');
+
+const BOOLEAN = new Set(['--force', '--watch', '--approve', '--retry', '--delivered']);
+const VALUED = new Set(['--text', '--file']);
 
 const args = process.argv.slice(2);
 const command = args.shift();
-const force = args.includes('--force');
-const watch = args.includes('--watch');
-const positional = args.filter(argument => !argument.startsWith('--'));
-const knownFlags = new Set(['--force', '--watch']);
-const unknownFlag = args.some(argument => argument.startsWith('--') && !knownFlags.has(argument));
-const validArity = command === 'unlock'
-  ? positional.length <= 2 && !watch
-  : positional.length === 1 && !force;
+const flags = { force: false, watch: false, approve: false, retry: false, delivered: false, text: undefined, file: undefined };
+const positional = [];
+let unknown = false;
+for (let i = 0; i < args.length; i++) {
+  const argument = args[i];
+  if (BOOLEAN.has(argument)) flags[argument.slice(2)] = true;
+  else if (VALUED.has(argument)) {
+    const value = args[++i];
+    if (value === undefined || value.startsWith('--')) { unknown = true; break; }
+    flags[argument.slice(2)] = value;
+  } else if (argument.startsWith('--')) { unknown = true; break; }
+  else positional.push(argument);
+}
+
+const resolution = ['approve', 'retry', 'delivered'].filter(key => flags[key]);
+const valid = {
+  status: positional.length === 1 && !resolution.length && flags.text === undefined && flags.file === undefined,
+  flush: positional.length === 1 && !resolution.length && flags.text === undefined && flags.file === undefined,
+  remember: positional.length === 1 && !resolution.length && (flags.text === undefined) !== (flags.file === undefined),
+  review: positional.length === 1 && !resolution.length && flags.text === undefined && flags.file === undefined,
+  resolve: positional.length === 2 && resolution.length === 1 && flags.text === undefined && flags.file === undefined,
+  unlock: positional.length <= 2 && !flags.watch && !resolution.length && flags.text === undefined && flags.file === undefined
+};
 
 async function readOptions(file) {
   return JSON.parse(await readFile(file, 'utf8'));
 }
 
-if (!['status', 'flush', 'unlock'].includes(command) || unknownFlag || !validArity) {
-  console.error('Usage: node cli.mjs status|flush /absolute/path/options.local.json [--watch]');
-  console.error('       node cli.mjs unlock [--force] [/absolute/path/options.local.json] [state-id]');
+async function snapshot(store, config, now) {
+  const rows = [];
+  for (const id of await store.ids()) {
+    await store.withState(id, async (state) => {
+      if (state.binding !== config.binding) return;
+      const pending = state.outbox.filter(e => e.kind !== 'remember' && e.status === 'pending');
+      const remembers = state.outbox.filter(e => e.kind === 'remember');
+      const ages = state.outbox.map(e => e.at).filter(at => Number.isFinite(at));
+      rows.push({
+        id,
+        label: state.label ?? null,
+        ovSession: state.ovSession,
+        createdAt: state.createdAt ? new Date(state.createdAt).toISOString() : null,
+        lastUsedAt: state.updated ? new Date(state.updated).toISOString() : null,
+        replayRecords: Object.keys(state.records).length,
+        candidate: Boolean(state.candidate),
+        candidateAgeSeconds: state.candidate?.at ? Math.max(0, Math.round((now - state.candidate.at) / 1000)) : null,
+        pending: pending.length,
+        pendingOldestAgeSeconds: ages.length ? Math.max(0, Math.round((now - Math.min(...ages)) / 1000)) : null,
+        uncertain: state.outbox.filter(e => e.kind !== 'remember' && e.status === 'uncertain').length,
+        rememberPending: remembers.filter(e => e.status !== 'uncertain').length,
+        rememberUncertain: remembers.filter(e => e.status === 'uncertain').length,
+        rememberAwaitingReview: remembers.filter(e => e.needsConfirm).length
+      });
+    }, { create: false });
+  }
+  rows.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  return rows;
+}
+
+if (!['status', 'flush', 'remember', 'review', 'resolve', 'unlock'].includes(command) || unknown || !valid[command]) {
+  console.error(USAGE);
   process.exitCode = 2;
 } else {
   try {
@@ -34,7 +90,7 @@ if (!['status', 'flush', 'unlock'].includes(command) || unknownFlag || !validAri
         else if (value.endsWith('.json')) options = await readOptions(value);
         else throw new Error('invalid unlock argument');
       }
-      const rows = await unlockStale(stateDirectory(options), { force, id });
+      const rows = await unlockStale(stateDirectory(options), { force: flags.force, id });
       console.log(JSON.stringify(rows, null, 2));
       if (rows.some(row => row.action === 'refused')) {
         console.error('A live process still owns at least one lock. Stop every host/worker using this directory, then retry.');
@@ -49,44 +105,31 @@ if (!['status', 'flush', 'unlock'].includes(command) || unknownFlag || !validAri
       const options = await readOptions(file);
       const config = configuration(options);
       if (!config) throw new Error('disabled');
-      let running = true;
-      process.on('SIGINT', () => { running = false; });
-      process.on('SIGTERM', () => { running = false; });
-      do {
-        if (command === 'flush') console.log(JSON.stringify(await drain(options)));
+      if (command === 'remember') {
+        const statement = flags.text ?? await readFile(flags.file, 'utf8');
+        console.log(JSON.stringify(await rememberNow(options, statement), null, 2));
+      } else if (command === 'review' || command === 'resolve') {
+        if (command === 'review') console.log(JSON.stringify(await reviewRemembers(options), null, 2));
         else {
-          const rows = [];
-          const store = new Store(config.stateDir);
-          const now = Date.now();
-          for (const id of await store.ids()) {
-            await store.withState(id, async (state) => {
-              if (state.binding !== config.binding) return;
-              const pending = state.outbox.filter(e => e.status === 'pending');
-              const ages = state.outbox.map(e => e.at).filter(at => Number.isFinite(at));
-              rows.push({
-                id,
-                label: state.label ?? null,
-                ovSession: state.ovSession,
-                createdAt: state.createdAt ? new Date(state.createdAt).toISOString() : null,
-                lastUsedAt: state.updated ? new Date(state.updated).toISOString() : null,
-                replayRecords: Object.keys(state.records).length,
-                candidate: Boolean(state.candidate),
-                candidateAgeSeconds: state.candidate?.at ? Math.max(0, Math.round((now - state.candidate.at) / 1000)) : null,
-                pending: pending.length,
-                pendingOldestAgeSeconds: ages.length ? Math.max(0, Math.round((now - Math.min(...ages)) / 1000)) : null,
-                uncertain: state.outbox.filter(e => e.status === 'uncertain').length
-              });
-            }, { create: false });
-          }
-          rows.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-          console.log(JSON.stringify(rows, null, 2));
+          const changed = await resolveRemember(options, positional[1], resolution[0]);
+          console.log(JSON.stringify({ resolved: changed, resolution: resolution[0] }, null, 2));
         }
-        if (watch && running) await sleep(1000);
-        else break;
-      } while (running);
+      } else {
+        let running = true;
+        process.on('SIGINT', () => { running = false; });
+        process.on('SIGTERM', () => { running = false; });
+        do {
+          if (command === 'flush') console.log(JSON.stringify(await drain(options)));
+          else console.log(JSON.stringify(await snapshot(new Store(config.stateDir), config, Date.now()), null, 2));
+          if (flags.watch && running) await sleep(1000);
+          else break;
+        } while (running);
+      }
     }
-  } catch {
-    console.error('Operation failed. Check the options, credential environment variable and local state permissions. No request content is printed.');
+  } catch (error) {
+    console.error(error?.message === 'statement rejected'
+      ? 'Refused: the text looks like a secret or sensitive identifier.'
+      : 'Operation failed. Check the options, credential environment variable and local state permissions. No request content is printed.');
     process.exitCode = 1;
   }
 }
