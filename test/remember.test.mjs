@@ -630,3 +630,88 @@ test('an intermediate tool step does not send a payload that is waiting for its 
   assert.equal(x.batches.length, 1);
   assert.equal(x.batches[0].body.messages.length, 2, 'the final answer is attached');
 });
+
+// --- third Copilot review (branch switch, tool steps, cached markers) ---
+
+test('a pruned classification is recomputed so a sensitive command stays out of capture', async t => {
+  const x = await setup(t, { capture: true });
+  const command = x.body('/记住 password: hunter2');
+  const ctx = x.context('/记住 password: hunter2'); ctx.success = true;
+  await x.plugin.onRequest(command, ctx);
+  let [state] = await x.states();
+  assert.equal(Object.keys(state.rememberByAnchor).length, 1);
+
+  // The client visits another branch in the same conversation, which prunes the
+  // classification along with the replay records.
+  await x.plugin.onRequest(x.body('另一个问题'), x.context('另一个问题'));
+  let [pruned] = await x.states();
+  assert.equal(Object.keys(pruned.rememberByAnchor).length, 0, 'the branch switch pruned it');
+
+  // Back on the original branch through a tool continuation.
+  const continuation = {
+    ...command,
+    messages: [
+      ...command.messages,
+      { role: 'assistant', content: '调用工具', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'tool output' }
+    ]
+  };
+  const back = x.context('/记住 password: hunter2'); back.success = true;
+  await x.plugin.onRequest(continuation, back);
+  assert.equal(back.state.openviking.user, '', 'the rejected command is still excluded from capture');
+  assert.equal(back.state.openviking.remember?.authorized, false, 'and it is still not authorising a write');
+
+  await x.plugin.onResponse(x.reply('好的'), back);
+  assert.equal(x.batches.filter(b => !b.path.includes('magpie-remember')).length, 0);
+  const [after] = await x.states();
+  assert.equal(after.candidate, null);
+});
+
+test('a tool step without a marker keeps the payload awaiting the final answer', async t => {
+  const x = await setup(t, { rememberModel: 'normalize' });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  const toolReply = { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: '调用工具', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] } }] };
+  await x.plugin.onResponse(toolReply, ctx);
+  assert.equal(x.batches.length, 0, 'the raw statement is not sent before the model can normalise it');
+
+  await x.plugin.onResponse(x.reply('已提交。\n/remember 用户偏好：默认用中文'), { ...ctx, state: structuredClone(ctx.state) });
+  assert.equal(x.batches.length, 1);
+  assert.match(x.batches[0].body.messages[0].content, /content: 用户偏好：默认用中文$/);
+});
+
+test('a marker cached during a tool step survives a final answer that omits it', async t => {
+  const x = await setup(t, { rememberModel: 'normalize', rememberIncludeAnswer: true, rememberRawFallback: false });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  const toolReply = { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: '调用工具\n/remember 用户偏好：中文', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] } }] };
+  await x.plugin.onResponse(toolReply, ctx);
+  assert.equal(x.batches.length, 0, 'answer context is still missing');
+
+  let [state] = await x.states();
+  assert.equal(state.outbox[0].normalised, '用户偏好：中文', 'the marker is persisted');
+
+  await x.plugin.onResponse(x.reply('好的，已提交。'), { ...ctx, state: structuredClone(ctx.state) });
+  assert.equal(x.batches.length, 1, 'the cached entry is not dropped');
+  assert.match(x.batches[0].body.messages[0].content, /content: 用户偏好：中文$/);
+  assert.equal(x.reports.includes('remember-dropped'), false);
+});
+
+test('a candidate keeps the accepted normalisation across a marker-less callback', async t => {
+  const x = await setup(t, { remember: 'assisted', rememberModel: 'normalize' });
+  const ctx = x.context('以后都用中文回答');
+  await x.plugin.onRequest(x.body('以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('好的\n/remember 用户偏好：默认用简体中文'), ctx);
+  let [state] = await x.states();
+  assert.equal(state.outbox[0].normalised, '用户偏好：默认用简体中文', 'the accepted entry is persisted, not only in memory');
+
+  // A later callback without a marker must not fall back to the raw statement.
+  await x.plugin.onResponse(x.reply('重新回答，没有标记'), { ...ctx, state: structuredClone(ctx.state) });
+  state = (await x.states())[0];
+  assert.match(JSON.stringify(state.outbox[0].messages), /用户偏好：默认用简体中文/);
+
+  const rows = await reviewRemembers(x.options, { env });
+  await resolveRemember(x.options, rows[0].eventId, 'approve', { env });
+  await drain(x.options, { env });
+  assert.match(x.batches[0].body.messages[0].content, /content: 用户偏好：默认用简体中文$/);
+});

@@ -72,6 +72,20 @@ opt-in-path correctness fixes; the wire format, the option names and the default
   awaiting so the final answer can still be attached, and a marker seen in a tool
   step is preserved for that final response.
 
+### History branches and tool steps
+
+- A remember classification is recomputed when it is missing on a history branch,
+  so a rejected sensitive command cannot become ordinary conversation text after
+  a branch switch and return. Continuations still never create new events.
+- A payload awaiting its final answer stays awaiting through a tool-calling step
+  that produced no final answer and no marker, instead of sending (or dropping)
+  the raw statement before the model can normalise it.
+- A normalisation cached from a tool step is used when the final answer omits the
+  marker, so it is no longer deleted as "no normalised entry".
+- A candidate's accepted normalisation is persisted before the flush that skips
+  candidates, so a later marker-less callback cannot replace it with the raw
+  statement.
+
 ### Upgrade note
 
 Receipts and session IDs written by v0.2.0 remain valid: their statement-only ids
@@ -81,7 +95,7 @@ because it is now conversation-scoped.
 
 ### Tests
 
-80 tests (19 new) cover the crash window, awaiting finalisation, idle fallback
+84 tests (23 new) cover the crash window, awaiting finalisation, idle fallback
 and drop, payload immutability after an attempted append, resolution guards,
 candidate release, tool continuations, answer privacy, conversation-scoped
 sessions, CLI opt-in and string Responses input. The capture-isolation test now
