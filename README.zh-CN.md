@@ -1,6 +1,6 @@
 # magpie-openviking
 
-[English](README.md) · MIT · 实验版 v0.1.0
+[English](README.md) · MIT · 实验版 v0.1.1
 
 由 **开放维京特工@飞书**（飞书智能体）开发 · 由 **[MengXiangxi](https://github.com/MengXiangxi)** 维护。
 
@@ -29,7 +29,7 @@ Agent → Magpie + 本插件 → 模型服务商
 
 需要支持 `magpie.hooks`、异步 `onRequest/onResponse`、`ctx.origin` 的 Magpie 版本，以及带上下文检索和会话 API 的 OV Server。本项目按 OV v0.5.2 文档实现，并在 v0.4.22 上实测（用到的字段两边都接受）。插件实际由 Magpie 的 Bun 宿主运行（仓库内的 Node.js 22+ 只用于测试和 worker）。
 
-**必须把 `gatewayTimeoutMs` 设为 3000 或更大。** Magpie 每个 hook 默认只有 1000 ms，比本插件自己的 `timeoutMs` 默认值 1500 ms 还短，按默认值跑等于每次召回都被宿主打断（fail open，表面上什么都正常，只是永远没有记忆）。注意它是**给 Magpie 宿主读的插件选项**，不是全局设置；而 `package.json` 里的 `magpie.options` 只是「建议值」，Magpie 不会自动套用。
+**建议把 `gatewayTimeoutMs` 设为 3000 或更大。** 插件现在按 `min(timeoutMs, gatewayTimeoutMs - 200)` 推导实际超时，Magpie 默认的 1000 ms 会得到 800 ms 召回预算，而不是必然被宿主打断；推导结果低于 500 ms 时状态会报 `skipped`。注意它是**给 Magpie 宿主读的插件选项**，不是全局设置；而 `package.json` 里的 `magpie.options` 只是「建议值」，Magpie 不会自动套用。
 
 安装后**必须真的存一次选项**（下面第二条命令，或在插件页保存同样的 JSON）。Magpie 插件页的开关和选项里的 `enabled` 是**两道独立的开关**，只开页面上那个、没有存选项时，插件状态会是 `skipped`。
 
@@ -40,7 +40,7 @@ magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
 ```
 
-想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.1.0`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。
+想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.1.1`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。从 v0.1.0 升级会一次性重置回放锚点和状态键（旧本地记录会重新召回一次），见 [CHANGELOG.md](CHANGELOG.md)。
 
 本地开发时改为目录安装：先在源码目录跑 `npm run check` 和 `npm test`（或 `npm run test:bun`），然后：
 
@@ -52,9 +52,11 @@ magpie plugin add /absolute/path/to/magpie-openviking
 
 目录安装是就地加载，要保留原目录，改源码后切换插件或改选项即可重载；GitHub 安装是 Magpie 自己维护的一份克隆，用 `magpie plugin update` 刷新。两种情况都不需要 npm install 或构建。新开一个完整历史会话，在 Magpie 插件页观察 `ready/empty`；`unbound` 表示身份、会话或环境配置不足。
 
+状态码：`ready`（已注入）、`empty`（检索无结果）、`skipped`（选项/预算/查询不适用）、`unbound`（缺少凭据、会话或来源）、`unavailable`（超时、网络或 5xx）、`unauthorized`（401/403）、`invalid`（其他 4xx 或响应格式错误）、`mismatch`（暂存回答未在后继历史中复现；召回不受影响）。上报字节数上限为 Magpie 的 32768。
+
 ## 开启记忆写入
 
-> **v0.1.0 的写入路径尚未验收。** `POST /sessions/{id}/messages/batch`、会话 `config` PATCH 和服务端记忆抽取只做过 OpenAPI schema 对照，没有任何真实服务器收到过本插件写入的回合。请先用一次性服务器/账号试，用 `ov session ...` 检查会话内容无误后再接到真实对话上。详见 [docs/verification.md](docs/verification.md)。
+> **v0.1.1 的写入路径尚未验收。** `POST /sessions/{id}/messages/batch`、会话 `config` PATCH 和服务端记忆抽取只做过 OpenAPI schema 对照，没有任何真实服务器收到过本插件写入的回合。请先用一次性服务器/账号试，用 `ov session ...` 检查会话内容无误后再接到真实对话上。详见 [docs/verification.md](docs/verification.md)。
 
 把插件选项改为 `capture:true`，其余保持一致。插件按独立命名空间创建 OV 会话，设置 20,000 pending token、超过 40 条 pending 消息或空闲 600 秒的自动提交策略。要让最后一种条件生效，**OV 服务端还必须开启自动提交调度器**：
 
@@ -78,13 +80,13 @@ worker 在 600 秒空闲后上传最后一个暂存回答；OV 收到消息后�
 
 - 首版只支持单人直连本机的请求。共享 Key、远程、转发或无法确认来源的请求保持原样，不将会话标签当作用户身份。
 - Responses 的 `previous_response_id` 或服务端 `conversation` 模式跳过，需要完整历史才能稳定回放。
-- 检测到已有 `<openviking-context` 时跳过，避免与现有 OV 插件重复注入。
+- 检测到已有 `<openviking-context` 时跳过，避免与现有 OV 插件重复注入。包装标记只是展示边界，不是安全边界：召回文本属于不可信内容，匹配的包装标签会在注入前转义，但仍无法消除提示注入风险。
 - 未实现 MCP 工具注册、自动 Rule 调用、上下文压缩接管或隐藏工具执行循环。
 - 新状态文件在 POSIX 上使用 0600、目录 0700；**Windows 无法设置 POSIX 权限位**，只能依赖用户目录 ACL。召回文本、待发送对话保存在本地私有状态目录中，插件本身不加密，请勿上传 GitHub。完整选项和数据说明见 [英文 README](README.md)。
-- **只有 worker 会清理过期状态**。不跑 worker 时，状态目录会随着会话数一直增长（每个会话一个文件，最多 512 条回放记录）。要清空请先停掉所有使用该目录的宿主与 worker，再删除目录。
+- **worker 与请求路径上每小时最多一次的惰性清理会删除过期状态。** 有暂存回答或未解决 outbox 条目的状态会保留。要清空请先停掉所有使用该目录的宿主与 worker，再删除目录。
 - 请求超时/检索失败时保留主请求；缓存命中和延迟收益需要真实环境验证，没有宣称性能提高比例。
-- `uncertain` 表示消息写入结果不确定，该会话后续导出暂停。须先检查 OV 对应会话再人工处理本地条目，不要直接重发。`source_message_ids` 是来源信息，不是服务端幂等键。
-- 进程异常退出可能留下 `.lock`。先停止所有使用该目录的宿主/worker，再检查并清除陈旧锁；运行中的锁不能删除。
+- `uncertain` 表示消息写入结果不确定，该会话后续导出暂停。须先检查 OV 对应会话再人工处理本地条目，不要直接重发。`source_message_ids` 是来源信息，不是服务端幂等键。`status` 会显示 agent、cwd 目录名、会话哈希前缀、协议和创建/最近使用时间，便于发现作用域漂移。
+- 进程异常退出可能留下 `.lock`。运行 `node cli.mjs unlock [--force] [/absolute/path/options.local.json] [state-id]` 可列出锁持有者，并只删除确认已退出的本机进程留下的锁；活进程的锁永远不会被删除，`--force` 仅用于其他主机或无法读取持有者的锁。
 
 ## 开发与维护
 
@@ -95,4 +97,4 @@ worker 在 600 秒空闲后上传最后一个暂存回答；OV 收到消息后�
 
 ## 验证范围
 
-提供协议单元测试和真实本地 HTTP mock 集成测试（Node 22 与 Bun 1.4.4 均为 22/22 通过），覆盖回放、重试、超时、身份隔离、确认后捕获、重新生成、空闲处理和不确定写入；召回已在真实 Magpie + OpenViking v0.4.22 上验证，**写入路径尚未验收**。GitHub Actions 在 Linux/macOS/Windows、Node 22/24 与 Bun 上跑同一套测试。
+提供协议单元测试和真实本地 HTTP mock 集成测试（Node 与 Bun 均 40/40 通过），覆盖回放裁剪、重试、超时推导、身份隔离、确认后捕获、重新生成、空闲处理、锁回收和不确定写入；召回已在真实 Magpie + OpenViking v0.4.22 上验证，**写入路径尚未验收**。GitHub Actions 在 Linux/macOS/Windows、Node 22/24 与 Bun 上跑同一套测试。

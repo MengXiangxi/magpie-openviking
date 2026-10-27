@@ -4,17 +4,19 @@
 
 1. Require explicit enablement, a personal credential, a host-derived `local` origin and a session label.
 2. Parse the original protocol without altering client-owned tool declarations, tool choice, reasoning or images. Skip server-managed Responses history and existing OV context blocks.
-3. Scope state by endpoint/credential fingerprint, agent, working directory, Magpie session, protocol and the first complete user-message prefix.
-4. Hash the unmodified complete prefix ending at each human message. A record belongs to that exact prefix, not merely to equal user text.
-5. Replay historical records. Search once for a new final user message, excluding already delivered URIs. Persist the exact block, or an empty result on failure, before returning the body.
+3. Scope state by endpoint/credential fingerprint, agent, working directory, Magpie session and protocol. The first-prefix hash is deliberately excluded: clients rewrite system/environment notices between requests, and that must not create a second state file or OpenViking session. Records remain keyed by complete-prefix anchors, so changed prefixes simply re-recall once.
+4. Hash the unmodified complete prefix ending at each human message as a domain-separated hash chain (`sha256(anchor_previous + NUL + item)`), giving linear cost and the same uniqueness guarantee. A record belongs to that exact prefix, not merely to equal user text. v0.1.1 changed the chain seed; older anchor records are pruned and re-recalled once.
+5. Replay historical records only for anchors present in the current history. Drop records outside it before computing the 512-record cap and the character budget, so compaction cannot permanently exhaust either. Search once for a new final user message, excluding already delivered URIs. Persist the exact block, or an empty result on failure, before returning the body.
 
 Only named API fields are sent; the plugin never sends Magpie authorization headers to OV. The configured personal OV credential is authoritative. A remote caller's session/agent labels cannot choose another OV user.
 
-The API request timeout should be shorter than the Magpie hook deadline. Failure is open for the model request. A timeout is frozen for this turn so retries do not rewrite old prefixes.
+The effective per-request timeout is `min(timeoutMs, gatewayTimeoutMs - 200)`, where `gatewayTimeoutMs` is the host budget (default 1000 ms). The worker has no host budget and uses `timeoutMs` directly. A derived value below 500 ms is reported as `skipped`. Failure is open for the model request. A timeout is frozen for this turn so retries do not rewrite old prefixes.
+
+The `<openviking-context>` wrapper is a presentation boundary, not a security boundary. Recalled text is untrusted; case-insensitive, whitespace-tolerant open/close wrapper tags are entity-escaped before wrapping (and the escaped length is checked against `maxRecallChars`). General prompt-injection risk remains inherent to injecting retrieved text. Reported replay bytes are clamped to the host's 32768 limit.
 
 ## Capture path
 
-The completion callback ignores interrupted replies, tool calls, truncated output and non-visible reasoning. It holds one candidate answer. The next complete client history must contain that exact answer after its user-message anchor before it is queued. Regeneration updates the held candidate. The worker can export the latest idle candidate after a configured delay, following an explicit opt-in.
+The completion callback ignores interrupted replies, tool calls, truncated output and non-visible reasoning. It holds one candidate answer. The next complete client history must contain that answer after its user-message anchor before it is queued; comparison collapses whitespace so clients that re-render text still acknowledge. A candidate that disappears without matching is dropped and reported as `mismatch`. Regeneration updates the held candidate. The worker can export the latest idle candidate after a configured delay, following an explicit opt-in.
 
 The outbox writes a checkpoint before a non-idempotent batch append. Once sending starts its status is `uncertain`; only a successful API response clears it and retains a local receipt hash. An exception, cancellation or process crash leaves the uncertain record for inspection. Later events in that session cannot pass it.
 
@@ -26,7 +28,9 @@ The companion worker does not recover a Magpie completion notification that neve
 
 Local files are transport/replay state, not a second long-term memory database. Keys are never written. Replay records contain private recalled context. Capture candidates/outbox records contain opt-in text until acknowledged/exported. Receipt records contain only hashes.
 
-State files are atomically replaced and protected by exclusive per-file locks. Concurrent requests fail open instead of racing a writer. Locks are not automatically stolen. Worker cleanup removes expired replay files only when they contain no candidate or unresolved export. Uncertain exports intentionally outlive the replay TTL until reconciled.
+State files are atomically replaced and protected by exclusive per-file locks. Concurrent requests fail open instead of racing a writer. Locks are not automatically stolen; `node cli.mjs unlock` lists owners and removes only locks whose recorded process is confirmed gone on this host (`--force` covers another host or an unreadable owner, never a live process). Rename/unlink operations retry transient Windows `EPERM`/`EBUSY`/`EACCES` failures with a short backoff.
+
+Replay-only requests do not rewrite the state file; a dirty flag suppresses writes when nothing changed (an hourly heartbeat still refreshes the TTL). A small non-secret label (agent, cwd basename, hashed session prefix, protocol, created time) is stored so `cli.mjs status` can show scope drift and last-used/pending ages. Worker cleanup removes expired replay files only when they contain no candidate or unresolved export; an at-most-hourly lazy prune at request time applies the same rule for users who never run the worker. Uncertain exports intentionally outlive the replay TTL until reconciled.
 
 ## Deliberately outside v0.1
 
@@ -47,4 +51,4 @@ Still **not** done, and not claimed anywhere in this repository:
 - TTFT, prompt-cache hit rate or cost comparison with the hook disabled.
 - macOS/Linux runtime behaviour beyond the CI matrix.
 
-The automated suite uses real HTTP sockets with a mock OpenViking API and captured protocol shapes, on Node 22 and Bun 1.4.4.
+The automated suite uses real HTTP sockets with a mock OpenViking API and captured protocol shapes, on Node 22 and Bun 1.4.4. It contains 40 tests: records pruning/budget, prefix-drift scope, wrapper sanitization, timeout derivation, outbox/capture edge cases, lock recovery, lazy pruning, filesystem retry and API error classification, plus the original protocol and integration coverage.

@@ -1,12 +1,14 @@
 {
   "name": "magpie-openviking",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenViking recall, stable context replay and opt-in conversation capture for Magpie async gateway hooks.",
   "type": "module",
   "license": "MIT",
   "author": "Xiangxi Meng <https://github.com/MengXiangxi> (maintainer)",
   "contributors": [
-    { "name": "开放维京特工@飞书 (Feishu agent)" }
+    {
+      "name": "开放维京特工@飞书 (Feishu agent)"
+    }
   ],
   "repository": {
     "type": "git",
@@ -16,9 +18,28 @@
   "bugs": {
     "url": "https://github.com/MengXiangxi/magpie-openviking/issues"
   },
-  "keywords": ["magpie-plugin", "magpie", "openviking", "memory", "gateway"],
-  "engines": { "node": ">=22" },
-  "files": ["index.js", "hooks.mjs", "lib/", "cli.mjs", "README.md", "README.zh-CN.md", "LICENSE", "examples/", "docs/"],
+  "keywords": [
+    "magpie-plugin",
+    "magpie",
+    "openviking",
+    "memory",
+    "gateway"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "index.js",
+    "hooks.mjs",
+    "lib/",
+    "cli.mjs",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "examples/",
+    "docs/"
+  ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:bun": "bun test test/",
