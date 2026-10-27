@@ -6,9 +6,9 @@ Last updated: 2026-10-27.
 
 | Check | Environment | Result |
 | --- | --- | --- |
-| `npm run check` | Node.js 22.19.0, Windows 11 | Syntax and Magpie manifest checks passed. |
-| `npm test` | Node.js 24.12.0, Windows 11 | 40 passed, 0 failed. |
-| `bun test test/` | Bun 1.4.3, Windows 11 | 40 passed, 0 failed. |
+| `npm run check` | Node.js 24.12.0, Windows 11 | Syntax and Magpie manifest checks passed. |
+| `npm test` | Node.js 24.12.0, Windows 11 | 61 passed, 0 failed. |
+| `bun test test/` | Bun 1.4.4, Windows 11 | 61 passed, 0 failed. |
 
 The suite uses real HTTP sockets against a mock OpenViking API and captured
 protocol shapes. It covers immutable protocol handling, byte-identical replay
@@ -17,6 +17,17 @@ state scoping, wrapper sanitization, timeout derivation, credential scoping,
 exclusive locks and stale-lock recovery, transient filesystem retries, lazy
 state pruning, timeout and redirect behaviour, capture acknowledgement and
 mismatch reporting, regeneration, idle draining and ambiguous-write suppression.
+
+Remember coverage (`test/remember.test.mjs`, 21 tests): command and bare-command
+detection with a previous-turn fallback, anchored-pattern candidates, secret and
+sensitive-identifier refusal, an assertion that the injected control instruction
+contains no CJK (the English-only i18n guard), wrapper-escape of untrusted text,
+authorised-only parsing of the machine-readable marker (line and comment forms),
+the locale-neutral payload header, one throw-away session per statement, no recall
+and no capture on a remember turn, content deduplication, request retries that
+keep a single event, model normalisation and raw fallback, uncertain-append
+suppression, commit-only retry, candidate approval through the CLI, the
+context-free `cli.mjs remember` write, stray-marker reporting, and the budget hint.
 
 One assertion in `test/integration.test.mjs` checks that state files are created
 `0600`. Windows has no POSIX mode bits (Node and Bun both report `0o666`), so it
@@ -47,6 +58,11 @@ flat `turn_id`, `message_kind`, `source_message_ids` and `auto_commit_policy`
   session `config` PATCH and no server-side memory extraction has been observed
   end to end. API shape conformance is checked, behaviour is not. Treat
   `capture:true` as experimental until you validate it against your own server.
+- **The remember path has never written to a real OpenViking Server either.**
+  `messages/batch` and `/commit` (including the `task_id` receipt) are checked
+  against `GET /openapi.json` and a mock server only. A live acceptance should
+  use a throw-away account and then verify the archived session and the
+  extraction task before connecting it to real conversations.
 - OpenViking **v0.5.2** specifically: the implementation follows its documented
   API, but only a v0.4.22 server was available for the live run.
 - Real model providers behind Magpie.

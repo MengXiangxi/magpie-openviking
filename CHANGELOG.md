@@ -1,5 +1,68 @@
 # Changelog
 
+## v0.2.0 — 2026-10-27
+
+Adds explicit `remember` to the gateway-hook mode. Everything is opt-in:
+`remember` defaults to `off`, and with it off the plugin behaves exactly as
+v0.1.1 did. State files stay compatible (an absent `remembered` array is added
+on first load); no migration step is required.
+
+### Remember
+
+- New `remember` option (`off`, `command`, `assisted`). A leading `/remember` or
+  `/记住` command — or a bare command, which remembers the previous user message —
+  authorises a write. In `assisted` mode anchored preference phrases only queue a
+  candidate that a human releases with `cli.mjs resolve --approve`.
+- `remember` is not a tool: the hook contract allows one inference request per
+  client request, so the write happens as `POST /sessions/{id}/messages/batch`
+  plus `POST /sessions/{id}/commit` on a throw-away session, in the completion
+  callback where the timeout is independent of the finished reply.
+- Events live in the existing outbox under `kind: "remember"` with three
+  distinct states: `pending` (not sent), `sent` (append outcome unknown, never
+  resent automatically) and `commit-pending` (append confirmed, only the commit
+  is retried). Uncertain appends and ambiguous commits are reconciled only by an
+  explicit CLI statement.
+- Content is deduplicated by a whitespace-insensitive hash of the statement, so a
+  retry, a regenerated answer or a replay cannot write the same entry twice.
+  A remember turn never recalls and is never also captured.
+- Secrets, API keys, ID/phone/medical identifiers are refused before anything is
+  queued (`remember-rejected`).
+
+### Model normalisation
+
+- `rememberModel: "normalize"` appends **one English control instruction** to the
+  outgoing request — English on purpose so a single reviewed text serves every
+  locale; the entry keeps the user's language and the confirmation sentence is
+  requested in the user's language. The instruction never enters the client's
+  history, so replay anchors stay byte-stable.
+- The model's machine-readable marker (`rememberMarker: "comment" | "line"`) is
+  accepted only when the same turn already passed the deterministic trigger;
+  otherwise it is reported as `remember-unrequested`. Tool-calling steps are
+  parsed too, because a marker is not a final answer.
+- Unusable model output falls back to the user's own words
+  (`remember-raw-fallback`); `rememberRawFallback: false` drops the request
+  instead (`remember-dropped`).
+
+### CLI and diagnostics
+
+- New `cli.mjs remember --text|--file` writes an entry with no conversation
+  state; `cli.mjs review` lists unresolved remember events without printing text;
+  `cli.mjs resolve <event-id> --approve|--retry|--delivered` records a human
+  decision. `flush` and `status` now process and count remember events.
+- New status codes: `remember-queued`, `remember-pending`, `remembered`,
+  `remember-raw-fallback`, `remember-rejected`, `remember-duplicate`,
+  `remember-dropped`, `remember-unrequested`, `remember-uncertain`,
+  `remember-commit-pending`, `remember-timeout`.
+- `remembered` means *archived plus extraction committed*, not *memory exists*.
+  `POST /commit` returns a `task_id`; extraction decides in the background.
+
+### Still not verified
+
+- The remember write path has only been exercised against a mock server and the
+  server's OpenAPI schema. No live OpenViking Server has ever received a
+  plugin-issued remember. Treat it as experimental until validated against a
+  throw-away account.
+
 ## v0.1.1 — 2026-10-27
 
 Fixes all seven issues reported against v0.1.0 (#1–#7).

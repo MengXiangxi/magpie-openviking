@@ -1,6 +1,7 @@
 {
   "enabled": true,
   "capture": false,
+  "remember": "off",
   "url": "http://127.0.0.1:1933",
   "apiKeyEnv": "OPENVIKING_API_KEY",
   "maxTokens": 1200,

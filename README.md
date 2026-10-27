@@ -4,7 +4,7 @@
 
 Developed by **开放维京特工@飞书** (a Feishu agent) · maintained by **[MengXiangxi](https://github.com/MengXiangxi)**.
 
-**Status:** recall is verified live against a Magpie hook host and an OpenViking Server v0.4.22. Capture is implemented and schema-checked but **not yet acceptance-tested against a live server** — see [docs/verification.md](docs/verification.md).
+**Status:** recall is verified live against a Magpie hook host and an OpenViking Server v0.4.22. Capture is implemented and schema-checked but **not yet acceptance-tested against a live server**; explicit remember is implemented and mock-verified but **has never written to a live server** — see [docs/verification.md](docs/verification.md).
 
 OpenViking memory inside Magpie's **asynchronous gateway hooks**. Magpie still sends the model request directly to its selected provider; OpenViking Server is a side API for retrieval and optional conversation capture. An extra OpenViking model gateway is not required.
 
@@ -21,6 +21,7 @@ Agent ──► Magpie + this hook ──► model provider
 - Append context to a new user message. Persist and replay exactly the same injection on later complete-history requests, including tool steps and retries.
 - Chat Completions, Anthropic Messages, full-history Responses and Gemini request/reply adapters. Client tool declarations, tool choice, images, reasoning blocks, model selection and streaming flags are preserved.
 - Explicitly opt-in text capture. A final answer is held until the next client history acknowledges it; regeneration replaces an unconfirmed answer. An optional worker flushes the last idle turn.
+- Explicitly opt-in **remember** from the user's own words. A leading `/remember` (or `/记住`) command, or an anchored preference phrase, writes one throw-away session and commits it for extraction. Rules decide *whether*; the model may only normalise *what*.
 - Local transport outbox. An append with an uncertain outcome is **not** automatically resent: OpenViking `source_message_ids` are provenance, not idempotency keys.
 - No runtime npm dependencies and no hidden model/tool execution loop.
 
@@ -61,7 +62,7 @@ A folder install is loaded in place, so keep the folder present and change optio
 
 Start a new complete-history chat. Magpie's Plugins page should report `ready` or `empty`. `unbound` usually means the credential/session is absent, or the request is not classified as a direct local request.
 
-Hook status codes: `ready` (a block was injected), `empty` (recall returned nothing), `skipped` (options, budget or query not eligible), `unbound` (missing credential/session/origin), `unavailable` (timeout, network or 5xx), `unauthorized` (401/403), `invalid` (other 4xx or a malformed response), and `mismatch` (a held capture answer never reappeared in the client history; recall is unaffected). The reported byte count is capped at Magpie's 32768 limit.
+Hook status codes: `ready` (a block was injected), `empty` (recall returned nothing), `skipped` (options, budget or query not eligible), `unbound` (missing credential/session/origin), `unavailable` (timeout, network or 5xx), `unauthorized` (401/403), `invalid` (other 4xx or a malformed response), and `mismatch` (a held capture answer never reappeared in the client history; recall is unaffected). Remember adds `remember-queued` (accepted, not sent yet), `remember-pending` (queued or awaiting review), `remembered` (archived and committed; extraction runs in the background), `remember-raw-fallback` (the model gave no normalised entry, the user's own words were stored), `remember-rejected` (secret or sensitive identifier), `remember-duplicate` (the same statement was already written), `remember-dropped` (no normalised entry and the fallback is disabled), `remember-uncertain` / `remember-commit-pending` (see Boundaries), and `remember-timeout` (the host budget is too small for two requests). The reported byte count is capped at Magpie's 32768 limit.
 
 ## Enable capture and memory extraction
 
@@ -95,6 +96,48 @@ node cli.mjs flush /absolute/path/options.local.json --watch
 
 The worker waits for 600 seconds of inactivity before exporting the last unacknowledged final answer. The server idle timer begins after it receives that turn, so last-turn extraction can take roughly both waiting periods plus processing time. Without the worker, the latest held candidate waits for another client request. Magpie's completion callback is best-effort: a reply whose notification never reached the plugin cannot be recovered by this worker.
 
+## Explicit remember
+
+> **Not acceptance-tested.** The remember write path — `POST /sessions/{id}/messages/batch`, `POST /sessions/{id}/commit` and server-side extraction — is verified against a mock server and the server's OpenAPI schema only. Try it against a throwaway account first, then inspect the session (for example with `ov session ...`).
+
+Magpie hooks cannot register tools or run a second inference round, so remember is not a tool call. It is a deterministic trigger on the user's own message plus an ordinary two-request write in the completion callback, where the host timeout is independent of the finished reply.
+
+```sh
+magpie plugin options magpie-openviking '{"enabled":true,"remember":"command","url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
+```
+
+| Trigger | Enabled by | Effect |
+| --- | --- | --- |
+| `/remember <text>` or `/记住 <text>` | `remember:"command"` | written at once, no confirmation |
+| a bare `/remember` | `remember:"command"` | remembers the previous user message |
+| anchored preference phrase (`以后都…`, `remember that…`) | `remember:"assisted"` | queues a candidate for `cli.mjs resolve … --approve` |
+| `cli.mjs remember --text` | any non-`off` value | explicit write with no conversation state |
+
+Only the user's own message can authorise a write; the model never decides whether one happens. A remember turn never recalls and is never also captured. Each statement is its own throw-away OpenViking session (`magpie-remember-…`) committed with `keep_recent_count: 0`, so extraction sees exactly that entry instead of an aggregated conversation.
+
+### Letting the model normalise the entry
+
+With `rememberModel:"normalize"` the plugin appends **one English instruction** to the outgoing request — never to the client's history, so replay anchors stay byte-stable. The model rewrites the entry and ends its reply with a machine-readable marker; the plugin parses it, re-applies the same privacy filter, and falls back to the user's own words when the model does not comply (`rememberRawFallback`, default on).
+
+The control instruction is English for every locale on purpose: one reviewed text instead of N translations. The entry itself keeps the user's language and is never translated, and the confirmation sentence is requested **in the language the user is using**.
+
+| `rememberMarker` | Marker | Visible to the user? |
+| --- | --- | --- |
+| `comment` (default) | `<!-- openviking-remember … -->` | hidden where Markdown is rendered, visible in terminal clients |
+| `line` | `/remember …` on the last line | always visible |
+
+A marker is accepted only when that same turn already passed the deterministic trigger (`remember-unrequested` otherwise), so prompt injection that makes the model emit one cannot write memory. Tool-calling steps are parsed too, because a marker is not a final answer.
+
+### Reviewing and reconciling
+
+```sh
+node cli.mjs remember /abs/options.local.json --text "…"   # explicit write, no conversation state
+node cli.mjs review   /abs/options.local.json               # labels, statuses and ages only, never text
+node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--delivered
+```
+
+`--approve` releases a candidate, `--retry` is a human statement that an `uncertain` append did not land, `--delivered` records one that did. The plugin never changes either state by itself: `sent` is never resent, and `commit-pending` retries the commit alone.
+
 ## Options
 
 | Option | Default | Meaning |
@@ -113,13 +156,26 @@ The worker waits for 600 seconds of inactivity before exporting the last unackno
 | `maxCaptureChars` | `64000` | Oversized user+answer pairs are skipped rather than silently truncated. |
 | `idleSeconds` | `600` | Final-candidate wait and OV idle commit policy, 300–86400. |
 | `stateTtlDays` | `7` | Worker and lazy hook cleanup of idle replay states with no unresolved capture. |
+| `remember` | `off` | `off`, `command` or `assisted`. Explicit opt-in, same as `capture`. |
+| `rememberModel` | `off` | `normalize` asks the model to rewrite the entry (see above); `off` stores the user's words verbatim. |
+| `rememberMarker` | `comment` | Machine-readable marker the model must emit: `comment` or `line`. |
+| `rememberMaxChars` | `4000` | 256–8000. Oversized statements are rejected, never truncated. |
+| `rememberTimeoutMs` | `1000` | Per request bound for the two remember calls, 200–9000. Derived for hooks as `min(x, max(200, (gatewayTimeoutMs-400)/2))`; below 400 ms the request reports `remember-timeout`. |
+| `rememberRawFallback` | `true` | Store the user's own words when the model emits no usable entry. `false` drops the request (`remember-dropped`). |
+| `rememberIncludeAnswer` | `false` | Also send the final answer of that turn as context. |
+| `rememberCommands` | `["/remember","/记住"]` | Command prefixes, up to 8, no whitespace. Add your own language without code changes. |
+| `rememberPatterns` | built-in zh/en list | Anchored regex sources for `assisted` candidates, up to 16. |
 
 ## Boundaries
 
 - **Personal, direct loopback traffic only.** `remote`, `gateway-key`, missing/unknown origins, and missing session labels are untouched. A session label is never treated as authenticated user identity. Shared/remote gateways need explicit per-user credential binding and are outside v0.1.
 - Responses requests using `previous_response_id` or server-managed `conversation` state are untouched. The plugin needs the complete visible history to replay reliably.
 - Another `<openviking-context` in the request disables this integration for that request, avoiding double injection. Disable other automatic OV hooks when using this one. The wrapper is a presentation boundary, not a security boundary: recalled text is untrusted, matching wrapper tags are escaped before injection, but prompt injection remains possible.
-- No client MCP tool registration, automatic Rule invocation, context compaction takeover or gateway-owned tool loop is implemented.
+- No client MCP tool registration, automatic Rule invocation, context compaction takeover or gateway-owned tool loop is implemented. Remember is deliberately a deterministic trigger plus a plain write, not a tool: the hook contract allows one inference request per client request.
+- **`remembered` means archived and committed, not stored as a memory.** `POST /commit` archives synchronously and returns a `task_id`; extraction decides in the background which memories to create or update. Poll the task or inspect the session before claiming a memory exists.
+- A remember event holds its statement on disk until it resolves (`pending`, `sent`, `commit-pending`, `uncertain`). `sent` means the append outcome is unknown and is never resent automatically; `commit-pending` retries the commit alone, which is a no-op when the throw-away session has nothing left to archive. Use `cli.mjs review` and `cli.mjs resolve` to reconcile by hand.
+- The visible marker is part of the assistant message the client keeps. If the user edits or removes it, that item changes and later turns in that conversation re-recall once.
+- Model-driven triggering (`propose`) and an out-of-band extractor that decides *what* is worth remembering without any user phrase are **not implemented**. Until then the trigger vocabulary is explicit commands and anchored patterns, which is why the command list is configurable.
 - Local replay states contain recalled private text. Opt-in capture additionally holds pending user/assistant text on disk. New files/directories use `0600`/`0700` **on POSIX**; Windows cannot set POSIX modes, so there the directory inherits the profile ACL instead. The plugin does not encrypt anything. Keep it outside Git, back it up only as private data, and use OS disk protection as needed.
 - Expired idle state is deleted by the companion worker (`drain`) and by an at-most-hourly lazy prune at request time. States with a pending candidate or unresolved outbox entry are retained. Stop every process using the directory, then delete it, to start clean.
 - One directory belongs to one host/worker installation. Exclusive per-state locks prevent concurrent modification. A crash can leave a `.lock`: run `node cli.mjs unlock [--force] [/absolute/path/options.local.json] [state-id]`, which lists lock owners and removes only locks whose recorded process is confirmed gone. `--force` is for another host or an unreadable owner (at least a minute old); a live process is never unlocked.
