@@ -10,16 +10,16 @@ const USAGE = [
   '       node cli.mjs flush /absolute/path/options.local.json [--watch]',
   '       node cli.mjs remember /absolute/path/options.local.json --text "..." | --file path',
   '       node cli.mjs review /absolute/path/options.local.json',
-  '       node cli.mjs resolve /absolute/path/options.local.json <event-id> --approve|--retry|--delivered',
+  '       node cli.mjs resolve /absolute/path/options.local.json <event-id> --approve|--retry|--delivered [--state <state-id>]',
   '       node cli.mjs unlock [--force] [/absolute/path/options.local.json] [state-id]'
 ].join('\n');
 
 const BOOLEAN = new Set(['--force', '--watch', '--approve', '--retry', '--delivered']);
-const VALUED = new Set(['--text', '--file']);
+const VALUED = new Set(['--text', '--file', '--state']);
 
 const args = process.argv.slice(2);
 const command = args.shift();
-const flags = { force: false, watch: false, approve: false, retry: false, delivered: false, text: undefined, file: undefined };
+const flags = { force: false, watch: false, approve: false, retry: false, delivered: false, text: undefined, file: undefined, state: undefined };
 const positional = [];
 let unknown = false;
 for (let i = 0; i < args.length; i++) {
@@ -67,9 +67,12 @@ async function snapshot(store, config, now) {
         pending: pending.length,
         pendingOldestAgeSeconds: ages.length ? Math.max(0, Math.round((now - Math.min(...ages)) / 1000)) : null,
         uncertain: state.outbox.filter(e => e.kind !== 'remember' && e.status === 'uncertain').length,
-        rememberPending: remembers.filter(e => e.status !== 'uncertain').length,
-        rememberUncertain: remembers.filter(e => e.status === 'uncertain').length,
-        rememberAwaitingReview: remembers.filter(e => e.needsConfirm).length
+        // `sent` is a crash window the worker will never resolve by itself, so it
+        // must be counted next to `uncertain` rather than as plain pending.
+        rememberPending: remembers.filter(e => e.status !== 'sent' && e.status !== 'uncertain').length,
+        rememberUncertain: remembers.filter(e => e.status === 'sent' || e.status === 'uncertain').length,
+        rememberAwaitingReview: remembers.filter(e => e.needsConfirm).length,
+        foreignBinding: state.binding !== config.binding
       });
     }, { create: false });
   }
@@ -111,7 +114,7 @@ if (!['status', 'flush', 'remember', 'review', 'resolve', 'unlock'].includes(com
       } else if (command === 'review' || command === 'resolve') {
         if (command === 'review') console.log(JSON.stringify(await reviewRemembers(options), null, 2));
         else {
-          const outcome = await resolveRemember(options, positional[1], resolution[0]);
+          const outcome = await resolveRemember(options, positional[1], resolution[0], { stateId: flags.state });
           console.log(JSON.stringify(outcome, null, 2));
           if (!outcome.changed) {
             console.error(`No change: ${outcome.reason}. Inspect the event with \`review\` first.`);

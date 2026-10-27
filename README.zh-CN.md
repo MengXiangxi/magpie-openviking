@@ -116,7 +116,7 @@ magpie plugin options magpie-openviking '{"enabled":true,"remember":"command","u
 ```sh
 node cli.mjs remember /abs/options.local.json --text "…"   # 显式写入，不建会话状态
 node cli.mjs review   /abs/options.local.json               # 只列标签/状态/时长，不打印正文
-node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--delivered
+node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--delivered [--state <state-id>]
 ```
 
 `--approve` 只放行从未发送过的候选，`--retry` 只用于 `sent`/`uncertain`（人工确认 append 没落库），`--delivered` 表示确认已落库。对已确认的 append 执行 approve、或对 `commit-pending` 执行 retry 都会被拒绝并说明原因，因为二者都可能触发第二次 append。CLI 写入本身也要求 `remember` 不是 `off`，即同一套开关约束这条路径，且每次调用使用独立会话。
@@ -130,7 +130,9 @@ node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--del
 - **`remembered` 只代表“已归档 + 已提交抽取任务”**。`POST /commit` 同步完成归档并返回 `task_id`，后台才决定创建/更新哪些记忆。不要据此向用户宣称“已经记住了”。
 - remember 事件在解决前会在本地保存语句原文（`awaiting`/`pending`/`sent`/`commit-pending`/`uncertain`）。每轮的分类只保存“判定结果 + 事件 id”，语句本身从客户端历史重新推导，因此不会多留一份明文副本。`sent` 表示 append 期间崩溃、结果未知，永不自动 commit 或重发；`commit-pending` 只重试 commit（一次性会话无可归档内容时为 no-op）。用 `cli.mjs review` / `cli.mjs resolve` 人工协调。
 - 去重是“对话内”的：同一句话在两段不同对话里记住，会产生两个事件和两个独立的一次性会话。
-- `rememberIncludeAnswer` 与语句走同一套过滤：看起来含密钥的回答会被从载荷中剔除（`remember-answer-omitted`），不会落盘也不会上传。
+- `rememberIncludeAnswer` 与语句走同一套尽力而为的过滤：看起来含凭据的回答会被剔除（`remember-answer-omitted`），超过 `rememberMaxChars` 的回答也会被丢弃，都不会落盘或上传。
+- 过滤覆盖密钥前缀、URL 里内嵌的账号密码、认证头、Cookie 和 `KEY=value` 形态，但它是**防误操作的护栏，不是 DLP 产品**；真正的保障仍然是不把密钥放进对话，`rememberModel:"normalize"` 只是第二层。
+- 更换凭据或服务端地址后，旧凭据写下且未解决的事件无法再投递：`cli.mjs review` 会把它们标成 `foreignBinding`，惰性清理会按 `stateTtlDays` 回收，也可以用 `resolve --state <id>` 在回收前人工处理。
 - 可见标记会留在客户端保存的助手消息里。用户删改它就会改变该条消息，导致该会话后续轮次重新召回一次。
 - **模型自主触发（`propose`）和带外抽取器（不靠用户句式决定“值不值得记”）尚未实现。** 目前触发词是显式指令加固定句式，所以指令表可配置。
 - 新状态文件在 POSIX 上使用 0600、目录 0700；**Windows 无法设置 POSIX 权限位**，只能依赖用户目录 ACL。召回文本、待发送对话保存在本地私有状态目录中，插件本身不加密，请勿上传 GitHub。完整选项和数据说明见 [英文 README](README.md)。

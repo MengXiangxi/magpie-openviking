@@ -24,9 +24,12 @@ implemented as a deterministic trigger plus an ordinary write:
    in the history. A leading command prefix (`/remember`, `/记住`, configurable)
    authorises a write; anchored preference patterns in `assisted` mode only
    produce a candidate that a human releases with `cli.mjs resolve --approve`.
-2. The statement passes a privacy filter before anything is queued (keys,
-   tokens, ID/phone/medical identifiers). A rejected statement is reported and
-   never stored, and that turn is not captured either.
+2. The statement passes a best-effort privacy filter before anything is queued
+   (key/token prefixes, credentials embedded in a URL, auth headers, cookies,
+   keyword=value secrets, ID/phone/medical identifiers). It is a guard against
+   accidents, not a DLP product: `rememberModel: "normalize"` is the second layer
+   and the README says so. A rejected statement is reported and never stored, and
+   that turn is not captured either.
 3. The event is appended to the same per-conversation outbox under
    `kind: "remember"`, keyed by a whitespace-insensitive hash of the statement.
    A repeat is reported as `remember-duplicate` instead of written twice.
@@ -114,4 +117,4 @@ Still **not** done, and not claimed anywhere in this repository:
 - TTFT, prompt-cache hit rate or cost comparison with the hook disabled.
 - macOS/Linux runtime behaviour beyond the CI matrix.
 
-The automated suite uses real HTTP sockets with a mock OpenViking API and captured protocol shapes, on Node 22 and Bun 1.4.4. It contains 40 tests: records pruning/budget, prefix-drift scope, wrapper sanitization, timeout derivation, outbox/capture edge cases, lock recovery, lazy pruning, filesystem retry and API error classification, plus the original protocol and integration coverage.
+The automated suite uses real HTTP sockets with a mock OpenViking API and captured protocol shapes, on Node 22 and Bun 1.4.4. It contains 100 tests: records pruning/budget, prefix-drift scope, wrapper sanitization, timeout derivation, outbox/capture edge cases, lock recovery, lazy pruning, filesystem retry and API error classification, plus the original protocol and integration coverage and the remember state machine (trigger, payload finalisation, delivery checkpoints, legacy recovery, retention and bounds).

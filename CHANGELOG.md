@@ -106,6 +106,43 @@ opt-in-path correctness fixes; the wire format, the option names and the default
 - The 64-anchor bound is applied after every insertion path (accepted plans,
   rejected commands and recovered continuations), not only for accepted plans.
 
+### Independent audit round
+
+An adversarial read-only review (three independent lanes: state machine, privacy
+and retention, spec versus code) found eleven further defects; all are fixed.
+
+- **Full outbox is a first-class outcome**: `remember-full` replaces a generic
+  `skipped`, the instruction no longer tells the user the entry was submitted, and
+  the callback no longer reports a duplicate for a write that was never queued.
+- **`resolve --delivered` is guarded**: it refuses an event whose append never
+  started (previously it recorded a receipt that locked that statement out of the
+  conversation for good) and one whose commit is still owed.
+- **`resolve` is unambiguous**: it locates the event across conversations first and
+  refuses a legacy statement-only id that exists in more than one, unless
+  `--state <id>` names one.
+- **The privacy filter covers real credential shapes**: credentials in a URL,
+  `sk_live_`/`rk_`/`pk_`, `AIza…`, `xoxb-…`, `github_pat_`, `glpat-`, `npm_`,
+  authorization headers, cookies and `KEY=value` secrets. The README, design doc
+  and this file now call it best-effort instead of implying a guarantee.
+- **Answer context is bounded** by `rememberMaxChars` and omitted when oversized,
+  like the statement.
+- **Retention**: the lazy prune no longer spends its per-run budget on live states,
+  and states written under another endpoint/credential are listed by `cli review`
+  and `cli status` (`foreignBinding`) and aged out instead of lingering forever.
+- **A command turn is never searched** in any script (`/记住 …` was still sent to
+  the retrieval endpoint), and an empty `ctx.query` falls back to the request text
+  instead of silently skipping recall and capture.
+- **Idle measures inactivity** (`touchedAt`), so a generation longer than
+  `idleSeconds` is not finalised early; an accepted normalisation is still used
+  when the notification is lost.
+- **The success code reflects the stored payload**: a cached normalisation reports
+  `remembered`, not `remember-raw-fallback`.
+- **`drain` keeps an idle capture candidate** when the outbox is full
+  (`captureDeferred`) instead of discarding the turn.
+- **The append checkpoint is durable on POSIX**: `save()` syncs the containing
+  directory after the rename, so an OS crash cannot leave the pre-append file while
+  the batch already landed (Windows has no directory handle to sync; documented).
+
 ### Upgrade note
 
 Receipts and session IDs written by v0.2.0 remain valid: their statement-only ids
@@ -115,7 +152,7 @@ because it is now conversation-scoped.
 
 ### Tests
 
-89 tests (28 new) cover the crash window, awaiting finalisation, idle fallback
+100 tests (39 new) cover the crash window, awaiting finalisation, idle fallback
 and drop, payload immutability after an attempted append, resolution guards,
 candidate release, tool continuations, answer privacy, conversation-scoped
 sessions, CLI opt-in and string Responses input. The capture-isolation test now
@@ -146,8 +183,10 @@ on first load); no migration step is required.
 - Content is deduplicated by a whitespace-insensitive hash of the statement, so a
   retry, a regenerated answer or a replay cannot write the same entry twice.
   A remember turn never recalls and is never also captured.
-- Secrets, API keys, ID/phone/medical identifiers are refused before anything is
-  queued (`remember-rejected`).
+- A best-effort pattern filter refuses credential shapes (key prefixes,
+  credentials in a URL, auth headers, cookies, `password=`), ID/phone numbers and
+  medical identifiers before anything is queued (`remember-rejected`). It is a
+  guard against accidents, not a DLP product.
 
 ### Model normalisation
 

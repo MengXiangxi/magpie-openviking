@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createPlugin, drain, rememberNow, resolveRemember, reviewRemembers } from '../lib/plugin.mjs';
+import { createPlugin, drain, pruneExpiredStates, rememberNow, resolveRemember, reviewRemembers } from '../lib/plugin.mjs';
+import { Store } from '../lib/store.mjs';
 import { configuration, hash } from '../lib/config.mjs';
 import { detect, redactReason, normalizePrompt, parseRemember, escapeUntrusted, buildMessages } from '../lib/remember.mjs';
 
@@ -587,7 +588,7 @@ test('switching remember off does not restore an old authorization', async t => 
 });
 
 test('a late callback for an already delivered event reports nothing as unavailable', async t => {
-  const x = await setup(t);
+  const x = await setup(t, { rememberModel: 'normalize' });
   const ctx = x.context();
   await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
   await x.plugin.onResponse(x.reply('好的'), ctx);
@@ -597,8 +598,16 @@ test('a late callback for an already delivered event reports nothing as unavaila
   const reports = [];
   late.report = (code) => reports.push(code);
   await x.plugin.onResponse(x.reply('已提交。\n/remember 以后都用中文回答'), late);
-  assert.equal(reports.includes('unavailable'), false, reports.join(','));
+  assert.deepEqual(reports, ['remember-duplicate'], 'the late callback is recognised, not silently ignored');
   assert.equal(x.batches.length, 1, 'nothing is written twice');
+
+  // Positive control: the same callback shape for a LIVE event is still written.
+  const live = x.context('/记住 明天上午十点开评审会');
+  await x.plugin.onRequest(x.body('/记住 明天上午十点开评审会'), live);
+  const [pending] = await x.states();
+  assert.equal(pending.outbox.length, 1);
+  await x.plugin.onResponse(x.reply('好的'), live);
+  assert.equal(x.batches.length, 2, 'a live event is still written after a duplicate was seen');
 });
 
 test('a pending candidate accepts a corrected normalisation before approval', async t => {
@@ -642,6 +651,8 @@ test('a classification survives a branch switch so a sensitive command stays out
   // The client visits another branch in the same conversation and comes back
   // through a tool continuation: the classification must not have been dropped.
   await x.plugin.onRequest(x.body('另一个问题'), x.context('另一个问题'));
+  const [stored] = await x.states();
+  assert.equal(Object.keys(stored.rememberByAnchor).length, 1, 'the classification is retained, not pruned by the branch switch');
   const continuation = {
     ...command,
     messages: [
@@ -796,4 +807,231 @@ test('the classification bound covers rejected commands and continuations too', 
   await x.plugin.onRequest(x.body('/记住 password: hunter2'), x.context('/记住 password: hunter2'));
   const [after] = await x.states();
   assert.ok(Object.keys(after.rememberByAnchor).length <= 64, `bounded, got ${Object.keys(after.rememberByAnchor).length}`);
+
+  // A tool continuation inserts through a different path and must be bounded too.
+  const continuation = {
+    model: 'test/model', stream: true,
+    messages: [
+      { role: 'user', content: '/记住 password: hunter2' },
+      { role: 'assistant', content: '调用工具', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'tool output' }
+    ]
+  };
+  for (let i = 0; i < 10; i++) {
+    await x.plugin.onRequest({ ...continuation, messages: [...continuation.messages.slice(0, 1), { role: 'assistant', content: `调用工具 ${i}`, tool_calls: [{ id: `c${i}`, type: 'function', function: { name: 'read', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `c${i}`, content: 'out' }] }, x.context('/记住 password: hunter2'));
+  }
+  const [bounded] = await x.states();
+  assert.ok(Object.keys(bounded.rememberByAnchor).length <= 64, `continuations are bounded too, got ${Object.keys(bounded.rememberByAnchor).length}`);
+});
+
+// --- audit round (subagent findings) -------------------------------------
+
+test('a full outbox never claims the write was submitted or a duplicate', async t => {
+  const x = await setup(t, { rememberModel: 'normalize' });
+  const file = async () => join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  const path = await file();
+  const state = JSON.parse(await readFile(path, 'utf8'));
+  for (let i = 0; i < 64; i++) state.outbox.push({ id: `capture-${i}`, user: 'u', assistant: 'a', anchor: `a${i}`, at: Date.now(), status: 'pending' });
+  state.outbox[0].status = 'pending';
+  await writeFile(path, JSON.stringify(state));
+
+  const reports = [];
+  const second = x.context('/记住 换成英文也可以');
+  second.report = (code) => reports.push(code);
+  const upstream = await x.plugin.onRequest(x.body('/记住 换成英文也可以'), second);
+  assert.ok(reports.includes('remember-full'), reports.join(','));
+  const injected = upstream.messages[0].content;
+  assert.match(injected, /could not be queued/);
+  assert.equal(/was submitted to long-term memory/.test(injected), false);
+
+  await x.plugin.onResponse(x.reply('好的\n/remember 换成英文也可以'), second);
+  assert.equal(reports.includes('remember-duplicate'), false);
+  assert.ok(reports.includes('remember-full'));
+  assert.equal(x.batches.filter(b => b.path.includes('magpie-remember')).length, 0);
+});
+
+test('resolve --delivered refuses an event that was never sent', async t => {
+  const x = await setup(t, { rememberModel: 'normalize' });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  const [state] = await x.states();
+  const id = state.outbox[0].id;
+
+  const refused = await resolveRemember(x.options, id, 'delivered', { env });
+  assert.equal(refused.changed, false);
+  assert.match(refused.reason, /nothing was ever appended/);
+  let after = (await x.states())[0];
+  assert.equal(after.outbox.length, 1, 'the event is kept');
+  assert.deepEqual(after.remembered, []);
+
+  // The statement is still writable afterwards.
+  const again = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), again);
+  await x.plugin.onResponse(x.reply('好的\n/remember 以后都用中文回答'), again);
+  assert.equal(x.batches.filter(b => b.path.includes('magpie-remember')).length, 1);
+});
+
+test('an ambiguous legacy id is refused until a state is named', async t => {
+  const x = await setup(t);
+  const statement = '以后都用中文回答';
+  const legacy = hash(`remember\0${statement}`);
+  for (const session of ['conv-a', 'conv-b']) {
+    await x.plugin.onRequest(x.body(`/记住 ${statement}`), x.context(`/记住 ${statement}`, { session }));
+  }
+  const names = (await readdir(x.directory)).filter(n => n.endsWith('.json'));
+  for (const name of names) {
+    const path = join(x.directory, name);
+    const state = JSON.parse(await readFile(path, 'utf8'));
+    state.outbox[0].id = legacy;            // v0.2.0 statement-only id
+    // An uncertain append is the only state `--delivered` may resolve.
+    state.outbox[0].status = 'uncertain';
+    state.outbox[0].awaiting = false;
+    state.outbox[0].needsConfirm = false;
+    await writeFile(path, JSON.stringify(state));
+  }
+  await assert.rejects(() => resolveRemember(x.options, legacy, 'delivered', { env }), /ambiguous/);
+
+  const rows = await reviewRemembers(x.options, { env });
+  assert.equal(rows.length, 2);
+  assert.equal(new Set(rows.map(r => r.stateId)).size, 2);
+  const target = rows[0].stateId;
+  const resolved = await resolveRemember(x.options, legacy, 'delivered', { env, stateId: target });
+  assert.equal(resolved.changed, true);
+  const remaining = (await reviewRemembers(x.options, { env })).filter(r => r.eventId === legacy);
+  assert.equal(remaining.length, 1, 'only the named conversation changed');
+  assert.equal(remaining[0].stateId !== target, true);
+});
+
+test('credential, URL and header shapes are refused, ordinary prose is not', async t => {
+  const dash = '-';
+  const cases = [
+    'db postgres://app:' + 'secretvalue' + '@db.internal:5432/orders',
+    'stripe key sk' + '_live_' + 'a'.repeat(24),
+    'google AIza' + 'B'.repeat(35),
+    'slack xoxb' + dash + '1'.repeat(12) + dash + 'a'.repeat(12),
+    'github_pat_' + 'A'.repeat(30),
+    'gitlab glpat' + dash + 'A'.repeat(20),
+    'npm_' + 'A'.repeat(36),
+    'Authorization: Basic dXNlcjpwYXNzd29yZA==',
+    'Cookie: session=abcdef123456',
+    'MYSQL_PASSWORD=hunter2'
+  ];
+  for (const value of cases) assert.equal(redactReason(value), 'secret', value);
+  for (const value of ['我偏好简洁的中文回答', 'remember to call the bank on Monday', 'task-list is long']) {
+    assert.equal(redactReason(value), null, value);
+  }
+});
+
+test('an oversized answer is not attached as remember context', async t => {
+  const x = await setup(t, { rememberIncludeAnswer: true, rememberMaxChars: 256 });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('x'.repeat(5000)), ctx);
+  assert.equal(x.batches.length, 1);
+  assert.equal(x.batches[0].body.messages.length, 1);
+  assert.ok(x.reports.includes('remember-answer-omitted'));
+});
+
+test('a state written under another credential is visible and can be aged out', async t => {
+  const x = await setup(t);
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), x.context());
+  const path = join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const state = JSON.parse(await readFile(path, 'utf8'));
+  state.binding = 'other-credential';
+  state.updated = Date.now() - 30 * 86400000;
+  await writeFile(path, JSON.stringify(state));
+
+  const rows = await reviewRemembers(x.options, { env });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].foreignBinding, true);
+
+  const config = configuration(x.options, { ...env });
+  const removed = await pruneExpiredStates(new Store(x.directory), config, Date.now, {});
+  assert.equal(removed, 1, 'a foreign state must not linger forever');
+  assert.equal((await readdir(x.directory)).filter(n => n.endsWith('.json')).length, 0);
+});
+
+test('expired states are found even behind many live ones', async t => {
+  const x = await setup(t);
+  const config = configuration(x.options, env);
+  const now = Date.now();
+  // 70 live states in readdir order before 3 expired ones.
+  for (let i = 0; i < 70; i++) {
+    await writeFile(join(x.directory, `${String(i).padStart(64, 'a')}.json`), JSON.stringify({
+      version: 1, binding: config.binding, ovSession: `s${i}`, records: {}, delivered: [], remembered: [],
+      outbox: [], candidate: null, updated: now
+    }));
+  }
+  for (let i = 0; i < 3; i++) {
+    await writeFile(join(x.directory, `${String(i).padStart(64, 'f')}.json`), JSON.stringify({
+      version: 1, binding: config.binding, ovSession: `e${i}`, records: {}, delivered: [], remembered: [],
+      outbox: [], candidate: null, updated: now - 30 * 86400000
+    }));
+  }
+  const removed = await pruneExpiredStates(new Store(x.directory), config, () => now, {});
+  assert.equal(removed, 3, 'live states must not consume the prune budget');
+});
+
+test('a command turn is not sent to the search endpoint in any language', async t => {
+  const x = await setup(t, { remember: 'off' });
+  const ctx = x.context('/记住 以后都用中文回答');
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  assert.equal(x.calls.filter(c => c.path === '/api/v1/search/search').length, 0);
+
+  // A normal question still recalls.
+  await x.plugin.onRequest(x.body('以后都用中文回答'), x.context('以后都用中文回答'));
+  assert.equal(x.calls.filter(c => c.path === '/api/v1/search/search').length, 1);
+});
+
+test('a cached normalisation is reported as remembered, not as a raw fallback', async t => {
+  const x = await setup(t, { rememberModel: 'normalize', rememberIncludeAnswer: true });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  const toolReply = { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: '调用工具\n/remember 用户偏好：中文', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] } }] };
+  await x.plugin.onResponse(toolReply, ctx);
+  await x.plugin.onResponse(x.reply('好的，已提交。'), { ...ctx, state: structuredClone(ctx.state) });
+  assert.equal(x.batches.length, 1);
+  assert.ok(x.reports.includes('remembered'));
+  assert.equal(x.reports.includes('remember-raw-fallback'), false);
+});
+
+test('an empty ctx.query falls back to the request text', async t => {
+  const x = await setup(t, { capture: true });
+  const ctx = x.context('', { session: 'empty-query' }); ctx.success = true;
+  await x.plugin.onRequest(x.body('Explain quicksort'), ctx);
+  assert.equal(x.calls.filter(c => c.path === '/api/v1/search/search').length, 1, 'recall still happens');
+  assert.equal(ctx.state.openviking.user, 'Explain quicksort', 'and the turn is still capturable');
+});
+
+test('an idle window measures inactivity, not request age', async t => {
+  const x = await setup(t, { rememberModel: 'normalize', rememberIncludeAnswer: true });
+  const clock = { t: Date.now() };
+  const plugin = createPlugin({ env, now: () => clock.t });
+  const ctx = x.context();
+  await plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  // A long generation: the tool-step callback arrives after the idle window.
+  clock.t += 700_000;
+  const toolReply = { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: ['调用工具', '/remember 用户偏好：中文'].join(String.fromCharCode(10)), tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] } }] };
+  await plugin.onResponse(toolReply, ctx);
+  clock.t += 200_000;
+  await drain(x.options, { env, now: () => clock.t });
+  assert.equal(x.batches.length, 0, 'the payload was touched 200 s ago, not 900 s ago');
+});
+
+test('the state directory is synced after a rename on POSIX', async t => {
+  if (process.platform === 'win32') { t.skip('Windows has no directory handle to sync'); return; }
+  const directory = await mkdtemp(join(tmpdir(), 'ov-fsync-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const opened = [];
+  const real = await import('node:fs/promises');
+  const store = new Store(directory, {
+    open: async (path, ...rest) => { opened.push(String(path)); return real.open(path, ...rest); }
+  });
+  await store.withState(hash('fsync-state'), async (state, save) => {
+    state.records = { a: { block: '' } };
+    await save();
+  });
+  assert.ok(opened.includes(directory), 'the containing directory is opened for a sync after the rename');
 });
