@@ -2,9 +2,10 @@
 
 ## v0.2.1 — 2026-10-27
 
-Fixes thirteen issues raised in the Copilot review of #8. All are local-state or
-opt-in-path correctness fixes; the wire format, the option names and the default
-`remember: "off"` are unchanged.
+A hardening release for the v0.2.0 remember feature: 39 review findings — 28 from
+Copilot across #8 and #9, and 11 from an independent three-lane adversarial audit —
+all fixed. The wire format, the option names and the default `remember: "off"` are
+unchanged, and state files stay compatible.
 
 ### Delivery state machine
 
@@ -152,7 +153,7 @@ because it is now conversation-scoped.
 
 ### Tests
 
-100 tests (39 new) cover the crash window, awaiting finalisation, idle fallback
+101 tests (61 new; one is platform-skipped on Windows) cover the crash window, awaiting finalisation, idle fallback
 and drop, payload immutability after an attempted append, resolution guards,
 candidate release, tool continuations, answer privacy, conversation-scoped
 sessions, CLI opt-in and string Responses input. The capture-isolation test now
