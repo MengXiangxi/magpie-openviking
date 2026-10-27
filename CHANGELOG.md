@@ -86,6 +86,16 @@ opt-in-path correctness fixes; the wire format, the option names and the default
   candidates, so a later marker-less callback cannot replace it with the raw
   statement.
 
+### Capture exclusion independent of the write opt-in
+
+- Remember classifications are no longer pruned by a history-branch switch; they
+  decide capture exclusion and are bounded to the newest 64 anchors instead.
+- When a classification is missing anyway (legacy state, or a long conversation)
+  and `remember` is off, commands are still recognised so a previously rejected
+  command is not captured as ordinary conversation text. The write stays off.
+- Idle recovery uses a normalisation accepted earlier instead of falling back to
+  the raw statement or dropping the event.
+
 ### Upgrade note
 
 Receipts and session IDs written by v0.2.0 remain valid: their statement-only ids
@@ -95,7 +105,7 @@ because it is now conversation-scoped.
 
 ### Tests
 
-84 tests (23 new) cover the crash window, awaiting finalisation, idle fallback
+86 tests (25 new) cover the crash window, awaiting finalisation, idle fallback
 and drop, payload immutability after an attempted append, resolution guards,
 candidate release, tool continuations, answer privacy, conversation-scoped
 sessions, CLI opt-in and string Responses input. The capture-isolation test now

@@ -633,21 +633,15 @@ test('an intermediate tool step does not send a payload that is waiting for its 
 
 // --- third Copilot review (branch switch, tool steps, cached markers) ---
 
-test('a pruned classification is recomputed so a sensitive command stays out of capture', async t => {
+test('a classification survives a branch switch so a sensitive command stays out of capture', async t => {
   const x = await setup(t, { capture: true });
   const command = x.body('/记住 password: hunter2');
   const ctx = x.context('/记住 password: hunter2'); ctx.success = true;
   await x.plugin.onRequest(command, ctx);
-  let [state] = await x.states();
-  assert.equal(Object.keys(state.rememberByAnchor).length, 1);
 
-  // The client visits another branch in the same conversation, which prunes the
-  // classification along with the replay records.
+  // The client visits another branch in the same conversation and comes back
+  // through a tool continuation: the classification must not have been dropped.
   await x.plugin.onRequest(x.body('另一个问题'), x.context('另一个问题'));
-  let [pruned] = await x.states();
-  assert.equal(Object.keys(pruned.rememberByAnchor).length, 0, 'the branch switch pruned it');
-
-  // Back on the original branch through a tool continuation.
   const continuation = {
     ...command,
     messages: [
@@ -665,6 +659,50 @@ test('a pruned classification is recomputed so a sensitive command stays out of 
   assert.equal(x.batches.filter(b => !b.path.includes('magpie-remember')).length, 0);
   const [after] = await x.states();
   assert.equal(after.candidate, null);
+});
+
+test('a lost classification is still recovered for capture when remember is off', async t => {
+  const x = await setup(t, { capture: true });
+  const command = x.body('/记住 password: hunter2');
+  const ctx = x.context('/记住 password: hunter2'); ctx.success = true;
+  await x.plugin.onRequest(command, ctx);
+
+  // Simulate a state that no longer holds the classification (older build, or a
+  // conversation long enough to evict it) while the feature is switched off.
+  const file = join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const state = JSON.parse(await readFile(file, 'utf8'));
+  state.rememberByAnchor = {};
+  await writeFile(file, JSON.stringify(state));
+
+  const continuation = {
+    ...command,
+    messages: [
+      ...command.messages,
+      { role: 'assistant', content: '调用工具', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'tool output' }
+    ]
+  };
+  const back = x.context('/记住 password: hunter2'); back.success = true;
+  await x.plugin.onRequest(continuation, { ...back, options: { ...x.options, remember: 'off' } });
+  assert.equal(back.state.openviking.user, '', 'the write is off, but the capture exclusion is preserved');
+  assert.equal(back.state.openviking.remember?.authorized, false);
+});
+
+test('idle recovery prefers a cached normalisation over the raw statement', async t => {
+  const idle = () => Date.now() + 700_000;
+  for (const fallback of [true, false]) {
+    const x = await setup(t, { rememberModel: 'normalize', rememberIncludeAnswer: true, rememberRawFallback: fallback });
+    const ctx = x.context();
+    await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+    const marker = '/remember 用户偏好：中文';
+    const toolReply = { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: ['调用工具', marker].join('\n'), tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] } }] };
+    await x.plugin.onResponse(toolReply, ctx);
+    // The final callback never arrives.
+    const result = await drain(x.options, { env, now: idle });
+    assert.equal(result.rememberDropped, 0, `cached entry must not be dropped (fallback=${fallback})`);
+    assert.equal(x.batches.length, 1, `the cached entry is sent (fallback=${fallback})`);
+    assert.match(x.batches[0].body.messages[0].content, /content: 用户偏好：中文$/);
+  }
 });
 
 test('a tool step without a marker keeps the payload awaiting the final answer', async t => {
