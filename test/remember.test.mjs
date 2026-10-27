@@ -1031,7 +1031,7 @@ test('the state directory is synced after a rename on POSIX', async t => {
   });
   await store.withState(hash('fsync-state'), async (state, save) => {
     state.records = { a: { block: '' } };
-    await save();
+    await save({ durable: true });
   });
   assert.ok(opened.includes(directory), 'the containing directory is opened for a sync after the rename');
 });

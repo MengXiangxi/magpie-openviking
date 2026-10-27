@@ -140,9 +140,10 @@ and retention, spec versus code) found eleven further defects; all are fixed.
   `remembered`, not `remember-raw-fallback`.
 - **`drain` keeps an idle capture candidate** when the outbox is full
   (`captureDeferred`) instead of discarding the turn.
-- **The append checkpoint is durable on POSIX**: `save()` syncs the containing
-  directory after the rename, so an OS crash cannot leave the pre-append file while
-  the batch already landed (Windows has no directory handle to sync; documented).
+- **The append checkpoint is durable on POSIX**: the `sent` checkpoint syncs the
+  containing directory after the rename, so an OS crash cannot leave the
+  pre-append file while the batch already landed (Windows has no directory handle
+  to sync; documented, and only that one save pays the cost).
 
 ### Upgrade note
 

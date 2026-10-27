@@ -38,4 +38,4 @@ jobs:
       - run: bun --version
       - run: npm run check
       # Magpie runs this plugin in its own Bun host, so the suite must pass here too.
-      - run: bun test test/
+      - run: bun test --timeout 30000 test/

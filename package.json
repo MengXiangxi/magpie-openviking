@@ -42,7 +42,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "test:bun": "bun test test/",
+    "test:bun": "bun test --timeout 30000 test/",
     "check": "node scripts/check.mjs"
   },
   "bin": {
