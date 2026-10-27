@@ -52,16 +52,36 @@ opt-in-path correctness fixes; the wire format, the option names and the default
 - A Responses request whose `input` is a bare string no longer loses the
   instruction.
 
+### Upgrade and late-callback recovery
+
+- v0.2.0 keyed remember events and receipts by the statement alone. Those legacy
+  ids are still recognised inside the conversation that holds them, so an upgrade
+  cannot write the same statement a second time or lose an unresolved delivery,
+  and a legacy event keeps its original throw-away session.
+- v0.2.0 events carry no `awaiting` flag. A legacy un-finalised payload is now
+  treated as awaiting instead of being sent as if it were final, so an upgrade
+  cannot bypass `rememberRawFallback: false`.
+- Switching `remember` to `off` no longer restores a saved authorisation on a tool
+  continuation. The turn's capture exclusion is kept; the write and its
+  instruction are not.
+- A late completion callback for an event the worker already delivered no longer
+  reports `unavailable` (and no longer touches the missing event).
+- A pending candidate accepts a corrected normalisation from a regenerated answer
+  until it is approved and sent; only an attempted append is immutable.
+- With `rememberIncludeAnswer`, an intermediate tool step keeps the payload
+  awaiting so the final answer can still be attached, and a marker seen in a tool
+  step is preserved for that final response.
+
 ### Upgrade note
 
-Receipts and session IDs written by v0.2.0 are keyed by the statement alone. They
-remain readable, but the same statement repeated after upgrading is written once
-more before the new conversation-scoped receipts apply. Nothing else changes: the
-state file version is unchanged and no migration step is required.
+Receipts and session IDs written by v0.2.0 remain valid: their statement-only ids
+are still honoured inside the same conversation, so nothing is written twice and
+no state migration is required. Only the session id of a *new* event changes,
+because it is now conversation-scoped.
 
 ### Tests
 
-74 tests (13 new) cover the crash window, awaiting finalisation, idle fallback
+80 tests (19 new) cover the crash window, awaiting finalisation, idle fallback
 and drop, payload immutability after an attempted append, resolution guards,
 candidate release, tool continuations, answer privacy, conversation-scoped
 sessions, CLI opt-in and string Responses input. The capture-isolation test now

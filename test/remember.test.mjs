@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { once } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createPlugin, drain, rememberNow, resolveRemember, reviewRemembers } from '../lib/plugin.mjs';
-import { configuration } from '../lib/config.mjs';
+import { configuration, hash } from '../lib/config.mjs';
 import { detect, redactReason, normalizePrompt, parseRemember, escapeUntrusted, buildMessages } from '../lib/remember.mjs';
 
 const env = { OPENVIKING_API_KEY: 'test-credential-not-real' };
@@ -529,4 +529,104 @@ test('a candidate instruction does not claim the entry was submitted', async t =
   const injected = upstream.messages[0].content;
   assert.match(injected, /still needs their approval/);
   assert.equal(/was submitted to long-term memory/.test(injected), false);
+});
+
+// --- second Copilot review (upgrade, late callbacks, regeneration) -------
+
+test('a v0.2.0 receipt still blocks the same statement after upgrading', async t => {
+  const x = await setup(t);
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  const file = join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const state = JSON.parse(await readFile(file, 'utf8'));
+  // Rewrite the receipt and the queued event the way v0.2.0 keyed them.
+  const legacy = hash(`remember\0${'以后都用中文回答'}`);
+  state.remembered = [legacy];
+  state.outbox = [];
+  await writeFile(file, JSON.stringify(state));
+
+  const reports = [];
+  const again = x.context('/记住 以后都用中文回答');
+  again.report = (code) => reports.push(code);
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), again);
+  assert.ok(reports.includes('remember-duplicate'), reports.join(','));
+  await x.plugin.onResponse(x.reply('好的'), again);
+  assert.equal(x.batches.length, 0, 'an upgraded install must not write it twice');
+});
+
+test('a v0.2.0 event without the awaiting flag is not sent as if it were final', async t => {
+  const x = await setup(t, { rememberModel: 'normalize', rememberRawFallback: false });
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), x.context());
+  const file = join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const state = JSON.parse(await readFile(file, 'utf8'));
+  delete state.outbox[0].awaiting;          // v0.2.0 shape
+  state.outbox[0].id = hash(`remember\0${'以后都用中文回答'}`);
+  await writeFile(file, JSON.stringify(state));
+
+  const result = await drain(x.options, { env, now: () => Date.now() + 700_000 });
+  assert.equal(x.batches.length, 0, 'an unfinished legacy payload is never sent');
+  assert.equal(result.rememberDropped, 1);
+});
+
+test('switching remember off does not restore an old authorization', async t => {
+  const x = await setup(t, { rememberModel: 'normalize', capture: true });
+  const command = x.body('/记住 以后都用中文回答');
+  await x.plugin.onRequest(command, x.context());
+  const continuation = {
+    ...command,
+    messages: [
+      ...command.messages,
+      { role: 'assistant', content: '调用工具', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'tool output' }
+    ]
+  };
+  const ctx = x.context();
+  const upstream = await x.plugin.onRequest(continuation, { ...ctx, options: { ...x.options, remember: 'off' } });
+  const text = JSON.stringify(upstream ?? {});
+  assert.equal(text.includes('<openviking-remember>'), false, 'no instruction is injected while remember is off');
+});
+
+test('a late callback for an already delivered event reports nothing as unavailable', async t => {
+  const x = await setup(t);
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('好的'), ctx);
+  assert.equal(x.batches.length, 1);
+
+  const late = { ...ctx, state: structuredClone(ctx.state) };
+  const reports = [];
+  late.report = (code) => reports.push(code);
+  await x.plugin.onResponse(x.reply('已提交。\n/remember 以后都用中文回答'), late);
+  assert.equal(reports.includes('unavailable'), false, reports.join(','));
+  assert.equal(x.batches.length, 1, 'nothing is written twice');
+});
+
+test('a pending candidate accepts a corrected normalisation before approval', async t => {
+  const x = await setup(t, { remember: 'assisted', rememberModel: 'normalize' });
+  const ctx = x.context('以后都用中文回答');
+  await x.plugin.onRequest(x.body('以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('好的\n/remember 用户偏好：中文'), ctx);
+  assert.equal(x.batches.length, 0, 'a candidate is not sent');
+
+  const again = { ...ctx, state: structuredClone(ctx.state) };
+  await x.plugin.onResponse(x.reply('好的\n/remember 用户偏好：默认用简体中文'), again);
+  const rows = await reviewRemembers(x.options, { env });
+  assert.equal(rows.length, 1);
+  await resolveRemember(x.options, rows[0].eventId, 'approve', { env });
+  await drain(x.options, { env });
+  assert.match(x.batches[0].body.messages[0].content, /content: 用户偏好：默认用简体中文$/);
+});
+
+test('an intermediate tool step does not send a payload that is waiting for its answer', async t => {
+  const x = await setup(t, { rememberIncludeAnswer: true });
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  const toolReply = { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: '调用工具', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] } }] };
+  await x.plugin.onResponse(toolReply, ctx);
+  assert.equal(x.batches.length, 0, 'the answer context is not available yet');
+
+  const finalReply = { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '好的，已提交。' } }] };
+  await x.plugin.onResponse(finalReply, { ...ctx, state: structuredClone(ctx.state) });
+  assert.equal(x.batches.length, 1);
+  assert.equal(x.batches[0].body.messages.length, 2, 'the final answer is attached');
 });
