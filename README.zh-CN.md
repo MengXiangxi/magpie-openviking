@@ -1,6 +1,6 @@
 # magpie-openviking
 
-[English](README.md) · MIT · 实验版 v0.1.1
+[English](README.md) · MIT · 实验版 v0.2.0
 
 由 **开放维京特工@飞书**（飞书智能体）开发 · 由 **[MengXiangxi](https://github.com/MengXiangxi)** 维护。
 
@@ -41,7 +41,7 @@ magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
 ```
 
-想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.1.1`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。从 v0.1.0 升级会一次性重置回放锚点和状态键（旧本地记录会重新召回一次），见 [CHANGELOG.md](CHANGELOG.md)。
+想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.2.0`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。从 v0.1.x 升级不需要迁移：`remember` 默认 `off`，状态文件在首次加载时自动补齐回执列表。见 [CHANGELOG.md](CHANGELOG.md)。
 
 本地开发时改为目录安装：先在源码目录跑 `npm run check` 和 `npm test`（或 `npm run test:bun`），然后：
 
@@ -57,7 +57,7 @@ magpie plugin add /absolute/path/to/magpie-openviking
 
 ## 开启记忆写入
 
-> **v0.1.1 的写入路径尚未验收。** `POST /sessions/{id}/messages/batch`、会话 `config` PATCH 和服务端记忆抽取只做过 OpenAPI schema 对照，没有任何真实服务器收到过本插件写入的回合。请先用一次性服务器/账号试，用 `ov session ...` 检查会话内容无误后再接到真实对话上。详见 [docs/verification.md](docs/verification.md)。
+> **v0.2.0 的两条写入路径都没有验收。** 捕获（`POST /sessions/{id}/messages/batch`、会话 `config` PATCH、服务端记忆抽取）与显式写入（`.../messages/batch` + `.../commit`）都只做过 OpenAPI schema 对照和 mock server 测试，没有任何真实服务器收到过本插件的写入。请先用一次性服务器/账号试，用 `ov session ...` 检查会话内容无误后再接到真实对话上。详见 [docs/verification.md](docs/verification.md)。
 
 把插件选项改为 `capture:true`，其余保持一致。插件按独立命名空间创建 OV 会话，设置 20,000 pending token、超过 40 条 pending 消息或空闲 600 秒的自动提交策略。要让最后一种条件生效，**OV 服务端还必须开启自动提交调度器**：
 

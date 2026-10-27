@@ -1,6 +1,6 @@
 # magpie-openviking
 
-[中文说明](README.zh-CN.md) · MIT · Experimental v0.1.1
+[中文说明](README.zh-CN.md) · MIT · Experimental v0.2.0
 
 Developed by **开放维京特工@飞书** (a Feishu agent) · maintained by **[MengXiangxi](https://github.com/MengXiangxi)**.
 
@@ -46,7 +46,7 @@ magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
 ```
 
-Pin the release instead of tracking the default branch with `github:MengXiangxi/magpie-openviking#v0.1.1`; `magpie plugin update magpie-openviking` moves an unpinned install forward. There is no npm publication and no build step. Upgrading from v0.1.0 performs a one-time replay-anchor/state-key reset (old local records re-recall once); see [CHANGELOG.md](CHANGELOG.md).
+Pin the release instead of tracking the default branch with `github:MengXiangxi/magpie-openviking#v0.2.0`; `magpie plugin update magpie-openviking` moves an unpinned install forward. There is no npm publication and no build step. Upgrading from v0.1.x keeps every option working: `remember` defaults to `off`, state files gain their receipt list on first load and need no migration. See [CHANGELOG.md](CHANGELOG.md).
 
 For local development, install the checkout in place instead. Run `npm run check` and `npm test` (or `npm run test:bun`) first, then:
 
@@ -66,7 +66,7 @@ Hook status codes: `ready` (a block was injected), `empty` (recall returned noth
 
 ## Enable capture and memory extraction
 
-> **Capture is not acceptance-tested in v0.1.1.** The write path — `POST /sessions/{id}/messages/batch`, the session `config` PATCH and server-side extraction — has only been checked against OpenViking's OpenAPI schema; no live server has received a captured turn from this plugin. Try it against a throwaway server/account first, then inspect the session (for example with `ov session ...`) before pointing it at real conversations. See [docs/verification.md](docs/verification.md).
+> **Neither write path is acceptance-tested in v0.2.0.** Capture (`POST /sessions/{id}/messages/batch`, the session `config` PATCH and server-side extraction) and remember (`.../messages/batch` plus `.../commit`) have only been checked against OpenViking's OpenAPI schema and a mock server; no live server has received either write from this plugin. Try them against a throwaway server/account first, then inspect the session (for example with `ov session ...`) before pointing them at real conversations. See [docs/verification.md](docs/verification.md).
 
 Capture exports original human text and final visible assistant text to your configured OpenViking user. It omits injected memories, tool traffic, reasoning and image data. First enable it explicitly:
 
