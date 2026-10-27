@@ -24,9 +24,12 @@ implemented as a deterministic trigger plus an ordinary write:
    in the history. A leading command prefix (`/remember`, `/记住`, configurable)
    authorises a write; anchored preference patterns in `assisted` mode only
    produce a candidate that a human releases with `cli.mjs resolve --approve`.
-2. The statement passes a privacy filter before anything is queued (keys,
-   tokens, ID/phone/medical identifiers). A rejected statement is reported and
-   never stored, and that turn is not captured either.
+2. The statement passes a best-effort privacy filter before anything is queued
+   (key/token prefixes, credentials embedded in a URL, auth headers, cookies,
+   keyword=value secrets, ID/phone/medical identifiers). It is a guard against
+   accidents, not a DLP product: `rememberModel: "normalize"` is the second layer
+   and the README says so. A rejected statement is reported and never stored, and
+   that turn is not captured either.
 3. The event is appended to the same per-conversation outbox under
    `kind: "remember"`, keyed by a whitespace-insensitive hash of the statement.
    A repeat is reported as `remember-duplicate` instead of written twice.
@@ -34,13 +37,29 @@ implemented as a deterministic trigger plus an ordinary write:
    signal independent of the finished reply: `POST /sessions/{id}/messages/batch`
    on a throw-away session, then `POST /sessions/{id}/commit` with
    `keep_recent_count: 0`. Remember has its own per-request bound
-   (`rememberTimeoutMs`) because it is two requests in one hook.
-5. A state is therefore not capture's binary checkpoint. `pending` has not been
-   sent; `sent` means the append outcome is unknown and is never resent;
-   `commit-pending` means the append is confirmed and only the commit failed, so
-   retrying the commit alone is safe. `uncertain` and `commit-pending` are only
-   reconciled by an explicit CLI statement, matching the existing rule that the
-   plugin never guesses about a non-idempotent write.
+   (`rememberTimeoutMs`) because it is two requests in one hook. The throw-away
+   session is namespaced by conversation, because receipts and locks are
+   per-conversation: a statement-keyed session shared by two conversations would
+   let both append under separate locks and interleave commits.
+5. Delivery is a four-state machine plus an `awaiting` flag, because a payload is
+   not always final when the trigger fires (the model may be asked to normalise
+   it, or the answer context is still missing):
+   - `awaiting` - not final, never sent. Sending the raw statement here would
+     bypass `rememberRawFallback: false`. The worker finalises it as the raw
+     statement after `idleSeconds`, or drops it when the fallback is disabled.
+   - `pending` - nothing attempted.
+   - `sent` - the append was started and the process stopped before the outcome
+     was recorded. Unknown, so it is never committed or resent: committing an
+     empty throw-away session archives nothing but would report the statement as
+     remembered.
+   - `commit-pending` - the append is confirmed (persisted before the commit
+     attempt) and only the commit failed, so retrying the commit alone is safe.
+   - `uncertain` - the append itself may have landed.
+   Only `pending` and `commit-pending` reach a commit. A payload is rewriteable
+   only while it is unsent, so a regenerated answer cannot desynchronise local
+   state from a session that may already hold the old text. `sent`, `uncertain`
+   and `commit-pending` are reconciled only by an explicit CLI statement, which
+   is also the only way to assert that an append did not land.
 
 The model may normalise an entry, never authorise one. With
 `rememberModel: "normalize"` the plugin appends one English instruction to the
@@ -98,4 +117,4 @@ Still **not** done, and not claimed anywhere in this repository:
 - TTFT, prompt-cache hit rate or cost comparison with the hook disabled.
 - macOS/Linux runtime behaviour beyond the CI matrix.
 
-The automated suite uses real HTTP sockets with a mock OpenViking API and captured protocol shapes, on Node 22 and Bun 1.4.4. It contains 40 tests: records pruning/budget, prefix-drift scope, wrapper sanitization, timeout derivation, outbox/capture edge cases, lock recovery, lazy pruning, filesystem retry and API error classification, plus the original protocol and integration coverage.
+The automated suite uses real HTTP sockets with a mock OpenViking API and captured protocol shapes, on Node 22 and Bun 1.4.4. It contains 100 tests: records pruning/budget, prefix-drift scope, wrapper sanitization, timeout derivation, outbox/capture edge cases, lock recovery, lazy pruning, filesystem retry and API error classification, plus the original protocol and integration coverage and the remember state machine (trigger, payload finalisation, delivery checkpoints, legacy recovery, retention and bounds).

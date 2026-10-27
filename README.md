@@ -1,6 +1,6 @@
 # magpie-openviking
 
-[中文说明](README.zh-CN.md) · MIT · Experimental v0.2.0
+[中文说明](README.zh-CN.md) · MIT · Experimental v0.2.1
 
 Developed by **开放维京特工@飞书** (a Feishu agent) · maintained by **[MengXiangxi](https://github.com/MengXiangxi)**.
 
@@ -46,7 +46,7 @@ magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
 ```
 
-Pin the release instead of tracking the default branch with `github:MengXiangxi/magpie-openviking#v0.2.0`; `magpie plugin update magpie-openviking` moves an unpinned install forward. There is no npm publication and no build step. Upgrading from v0.1.x keeps every option working: `remember` defaults to `off`, state files gain their receipt list on first load and need no migration. See [CHANGELOG.md](CHANGELOG.md).
+Pin the release instead of tracking the default branch with `github:MengXiangxi/magpie-openviking#v0.2.1`; `magpie plugin update magpie-openviking` moves an unpinned install forward. There is no npm publication and no build step. Upgrading from v0.1.x keeps every option working: `remember` defaults to `off`, state files gain their receipt list on first load and need no migration. See [CHANGELOG.md](CHANGELOG.md).
 
 For local development, install the checkout in place instead. Run `npm run check` and `npm test` (or `npm run test:bun`) first, then:
 
@@ -62,7 +62,7 @@ A folder install is loaded in place, so keep the folder present and change optio
 
 Start a new complete-history chat. Magpie's Plugins page should report `ready` or `empty`. `unbound` usually means the credential/session is absent, or the request is not classified as a direct local request.
 
-Hook status codes: `ready` (a block was injected), `empty` (recall returned nothing), `skipped` (options, budget or query not eligible), `unbound` (missing credential/session/origin), `unavailable` (timeout, network or 5xx), `unauthorized` (401/403), `invalid` (other 4xx or a malformed response), and `mismatch` (a held capture answer never reappeared in the client history; recall is unaffected). Remember adds `remember-queued` (accepted, not sent yet), `remember-pending` (queued or awaiting review), `remembered` (archived and committed; extraction runs in the background), `remember-raw-fallback` (the model gave no normalised entry, the user's own words were stored), `remember-rejected` (secret or sensitive identifier), `remember-duplicate` (the same statement was already written), `remember-dropped` (no normalised entry and the fallback is disabled), `remember-uncertain` / `remember-commit-pending` (see Boundaries), and `remember-timeout` (the host budget is too small for two requests). The reported byte count is capped at Magpie's 32768 limit.
+Hook status codes: `ready` (a block was injected), `empty` (recall returned nothing), `skipped` (options, budget or query not eligible), `unbound` (missing credential/session/origin), `unavailable` (timeout, network or 5xx), `unauthorized` (401/403), `invalid` (other 4xx or a malformed response), and `mismatch` (a held capture answer never reappeared in the client history; recall is unaffected). Remember adds `remember-queued` (accepted, not sent yet), `remember-pending` (queued or awaiting review), `remembered` (archived and committed; extraction runs in the background), `remember-raw-fallback` (the model gave no normalised entry, the user's own words were stored), `remember-answer-omitted` (the answer context looked sensitive and was dropped), `remember-rejected` (secret or sensitive identifier), `remember-duplicate` (the same statement was already written), `remember-dropped` (no normalised entry and the fallback is disabled), `remember-full` (the bounded outbox refused the write, so nothing was queued), `remember-unrequested` (a marker arrived on a turn that never passed the trigger), `remember-uncertain` / `remember-commit-pending` (see Boundaries), and `remember-timeout` (the host budget is too small for two requests). The reported byte count is capped at Magpie's 32768 limit.
 
 ## Enable capture and memory extraction
 
@@ -113,7 +113,9 @@ magpie plugin options magpie-openviking '{"enabled":true,"remember":"command","u
 | anchored preference phrase (`以后都…`, `remember that…`) | `remember:"assisted"` | queues a candidate for `cli.mjs resolve … --approve` |
 | `cli.mjs remember --text` | any non-`off` value | explicit write with no conversation state |
 
-Only the user's own message can authorise a write; the model never decides whether one happens. A remember turn never recalls and is never also captured. Each statement is its own throw-away OpenViking session (`magpie-remember-…`) committed with `keep_recent_count: 0`, so extraction sees exactly that entry instead of an aggregated conversation.
+Only the user's own message can authorise a write; the model never decides whether one happens. A remember turn never recalls and is never also captured. Each statement is its own throw-away OpenViking session, scoped to the conversation that asked for it, committed with `keep_recent_count: 0`. Extraction therefore sees exactly that entry instead of an aggregated conversation, and two conversations can never append to one session.
+
+Delivery has four states plus an `awaiting` flag: `awaiting` (the payload is not final — the model was asked to normalise it, or answer context is still missing — so it is never sent), `pending` (nothing attempted), `sent` (a crash interrupted the append: unknown, and never automatically committed or resent), `commit-pending` (append confirmed, only the commit failed) and `uncertain` (the append may have landed). Committing is reached only from `pending` or `commit-pending`, so an empty throw-away session can never be archived and reported as a successful write.
 
 ### Letting the model normalise the entry
 
@@ -136,7 +138,7 @@ node cli.mjs review   /abs/options.local.json               # labels, statuses a
 node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--delivered
 ```
 
-`--approve` releases a candidate, `--retry` is a human statement that an `uncertain` append did not land, `--delivered` records one that did. The plugin never changes either state by itself: `sent` is never resent, and `commit-pending` retries the commit alone.
+`--approve` releases a candidate that was never sent, `--retry` records a human judgement that an `uncertain` append did not land, `--delivered` records one that did. Approving a confirmed event and retrying a `commit-pending` one are refused with an explanation, because neither may trigger a second append. The CLI write itself requires a non-`off` `remember` mode, so the opt-in switch governs this path too, and it uses a fresh session per invocation.
 
 ## Options
 
@@ -173,7 +175,9 @@ node cli.mjs resolve  /abs/options.local.json <event-id> --approve|--retry|--del
 - Another `<openviking-context` in the request disables this integration for that request, avoiding double injection. Disable other automatic OV hooks when using this one. The wrapper is a presentation boundary, not a security boundary: recalled text is untrusted, matching wrapper tags are escaped before injection, but prompt injection remains possible.
 - No client MCP tool registration, automatic Rule invocation, context compaction takeover or gateway-owned tool loop is implemented. Remember is deliberately a deterministic trigger plus a plain write, not a tool: the hook contract allows one inference request per client request.
 - **`remembered` means archived and committed, not stored as a memory.** `POST /commit` archives synchronously and returns a `task_id`; extraction decides in the background which memories to create or update. Poll the task or inspect the session before claiming a memory exists.
-- A remember event holds its statement on disk until it resolves (`pending`, `sent`, `commit-pending`, `uncertain`). `sent` means the append outcome is unknown and is never resent automatically; `commit-pending` retries the commit alone, which is a no-op when the throw-away session has nothing left to archive. Use `cli.mjs review` and `cli.mjs resolve` to reconcile by hand.
+- A remember event holds its statement on disk until it resolves (`awaiting`, `pending`, `sent`, `commit-pending`, `uncertain`). The per-turn classification keeps only the decision and the event id; the text is recomputed from the client history, so no second copy outlives the event. `sent` means a crash interrupted the append and the outcome is unknown: it is never committed or resent automatically. `commit-pending` retries the commit alone, which is a no-op when the throw-away session has nothing left to archive. Use `cli.mjs review` and `cli.mjs resolve` to reconcile by hand.
+- Deduplication is conversation-local: the same statement remembered in two different conversations writes two events with two separate throw-away sessions.
+- `rememberIncludeAnswer` is filtered like the statement itself: an answer that looks like it contains a secret is dropped from the payload (`remember-answer-omitted`) rather than persisted and exported.
 - The visible marker is part of the assistant message the client keeps. If the user edits or removes it, that item changes and later turns in that conversation re-recall once.
 - Model-driven triggering (`propose`) and an out-of-band extractor that decides *what* is worth remembering without any user phrase are **not implemented**. Until then the trigger vocabulary is explicit commands and anchored patterns, which is why the command list is configurable.
 - Local replay states contain recalled private text. Opt-in capture additionally holds pending user/assistant text on disk. New files/directories use `0600`/`0700` **on POSIX**; Windows cannot set POSIX modes, so there the directory inherits the profile ACL instead. The plugin does not encrypt anything. Keep it outside Git, back it up only as private data, and use OS disk protection as needed.

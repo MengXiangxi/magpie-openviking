@@ -1,6 +1,6 @@
 {
   "name": "magpie-openviking",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenViking recall, stable context replay, opt-in conversation capture and explicit remember for Magpie async gateway hooks.",
   "type": "module",
   "license": "MIT",
