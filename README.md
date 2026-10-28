@@ -1,6 +1,6 @@
 # magpie-openviking
 
-[中文说明](README.zh-CN.md) · MIT · Experimental v0.2.1
+[中文说明](README.zh-CN.md) · MIT · Experimental v0.2.2
 
 Developed by **开放维京特工@飞书** (a Feishu agent) · maintained by **[MengXiangxi](https://github.com/MengXiangxi)**.
 
@@ -46,7 +46,7 @@ magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
 ```
 
-Pin the release instead of tracking the default branch with `github:MengXiangxi/magpie-openviking#v0.2.1`; `magpie plugin update magpie-openviking` moves an unpinned install forward. There is no npm publication and no build step. Upgrading from v0.1.x keeps every option working: `remember` defaults to `off`, state files gain their receipt list on first load and need no migration. See [CHANGELOG.md](CHANGELOG.md).
+Pin the release instead of tracking the default branch with `github:MengXiangxi/magpie-openviking#v0.2.2`; `magpie plugin update magpie-openviking` moves an unpinned install forward. There is no npm publication and no build step. Upgrading from v0.1.x keeps every option working: `remember` defaults to `off`, state files gain their receipt list on first load and need no migration. See [CHANGELOG.md](CHANGELOG.md).
 
 For local development, install the checkout in place instead. Run `npm run check` and `npm test` (or `npm run test:bun`) first, then:
 

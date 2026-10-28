@@ -1,6 +1,6 @@
 # magpie-openviking
 
-[English](README.md) · MIT · 实验版 v0.2.1
+[English](README.md) · MIT · 实验版 v0.2.2
 
 由 **开放维京特工@飞书**（飞书智能体）开发 · 由 **[MengXiangxi](https://github.com/MengXiangxi)** 维护。
 
@@ -41,7 +41,7 @@ magpie plugin add github:MengXiangxi/magpie-openviking
 magpie plugin options magpie-openviking '{"enabled":true,"capture":false,"url":"http://127.0.0.1:1933","apiKeyEnv":"OPENVIKING_API_KEY","maxTokens":1200,"timeoutMs":1500,"gatewayTimeoutMs":3000}'
 ```
 
-想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.2.1`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。从 v0.1.x 升级不需要迁移：`remember` 默认 `off`，状态文件在首次加载时自动补齐回执列表。见 [CHANGELOG.md](CHANGELOG.md)。
+想钉住某个版本而不是跟随主分支，用 `github:MengXiangxi/magpie-openviking#v0.2.2`；不钉版本的安装用 `magpie plugin update magpie-openviking` 升级。没有 npm 发布，也不需要构建。从 v0.1.x 升级不需要迁移：`remember` 默认 `off`，状态文件在首次加载时自动补齐回执列表。见 [CHANGELOG.md](CHANGELOG.md)。
 
 本地开发时改为目录安装：先在源码目录跑 `npm run check` 和 `npm test`（或 `npm run test:bun`），然后：
 
