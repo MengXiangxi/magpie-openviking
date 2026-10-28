@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.2.2 — 2026-10-28
+
+Two findings from the first live run inside Magpie.
+
+- **A commit that archives nothing is no longer reported as written.** If the
+  batch append claims success but the immediately following commit returns
+  `skipped`/`no_messages`, the event is marked `uncertain` instead of recording a
+  receipt: a receipt would lock that statement out of the conversation while
+  nothing had been written. A re-commit on the recovery path still treats
+  "nothing to archive" as the expected no-op.
+- **Documented: saved options need a plugin reload.** `magpie plugin options`
+  does not push into a host that already loaded the plugin; toggle the plugin or
+  restart Magpie. Measured live — a `/记住` command was ignored until the toggle
+  and worked immediately afterwards. The README now says so, and also states that
+  the command must start the message.
+
+Verified end to end inside a real Magpie host against OpenViking v0.5.2: recall
+injected ~3.0–3.7 KB in ~200 ms; a privacy-rejected command queued nothing and
+did not recall; a normalising `/记住` turn produced the marker, the write, a
+receipt, and server-side extraction (`memory_write`/`memory_edit` on the
+throw-away session).
+
 ## v0.2.1 — 2026-10-27
 
 A hardening release for the v0.2.0 remember feature: 39 review findings — 28 from
