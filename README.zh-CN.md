@@ -30,7 +30,7 @@ Agent → Magpie + 本插件 → 模型服务商
 
 需要支持 `magpie.hooks`、异步 `onRequest/onResponse`、`ctx.origin` 的 Magpie 版本，以及带上下文检索和会话 API 的 OV Server。本项目按 OV v0.5.2 文档实现，并在 v0.4.22 上实测（用到的字段两边都接受）。插件实际由 Magpie 的 Bun 宿主运行（仓库内的 Node.js 22+ 只用于测试和 worker）。
 
-**建议把 `gatewayTimeoutMs` 设为 3000 或更大。** 插件现在按 `min(timeoutMs, gatewayTimeoutMs - 200)` 推导实际超时，Magpie 默认的 1000 ms 会得到 800 ms 召回预算，而不是必然被宿主打断；推导结果低于 500 ms 时状态会报 `skipped`。注意它是**给 Magpie 宿主读的插件选项**，不是全局设置；而 `package.json` 里的 `magpie.options` 只是「建议值」，Magpie 不会自动套用。
+**建议把 `gatewayTimeoutMs` 设为 3000 或更大。** 插件现在按 `min(timeoutMs, gatewayTimeoutMs - 200)` 推导实际超时，Magpie 默认的 1000 ms 会得到 800 ms 召回预算，而不是必然被宿主打断；推导结果低于 500 ms 时状态会报 `skipped`。注意它是**给 Magpie 宿主读的插件选项**，不是全局设置；而 `package.json` 里的 `magpie.options` 只是「建议值」，Magpie 不会自动套用。**保存的选项不会推送到已加载插件的宿主**：需要把插件关一次再开（`magpie plugin off magpie-openviking` → `on`）或重启 Magpie，否则运行中的宿主仍用旧值（2026-10-28 实测：`remember` 指令在关开之前被忽略，关开后立即生效）。
 
 安装后**必须真的存一次选项**（下面第二条命令，或在插件页保存同样的 JSON）。Magpie 插件页的开关和选项里的 `enabled` 是**两道独立的开关**，只开页面上那个、没有存选项时，插件状态会是 `skipped`。
 
@@ -94,7 +94,7 @@ magpie plugin options magpie-openviking '{"enabled":true,"remember":"command","u
 | 固定句式（`以后都…`、`记住：…`） | `remember:"assisted"` | 只入队为候选，需 `cli.mjs resolve … --approve` |
 | `cli.mjs remember --text` | 任意非 `off` 值 | 不依赖会话状态的显式写入 |
 
-只有用户自己的消息能授权写入，模型永远不决定“是否写”。remember 回合既不召回，也不会被对话捕获重复写入。每条语句使用独立的一次性会话、且会话按“发起它的那段对话”命名空间（不再跨对话共享），以 `keep_recent_count: 0` 提交，抽取范围就只有这一条。
+只有用户自己的消息能授权写入，模型永远不决定“是否写”。命令必须位于消息开头（允许前导空白）；有些命令行客户端会把环境通告塞进同一条消息的前面，那种情况不会匹配，该回合按普通问题处理。remember 回合既不召回，也不会被对话捕获重复写入。每条语句使用独立的一次性会话、且会话按“发起它的那段对话”命名空间（不再跨对话共享），以 `keep_recent_count: 0` 提交，抽取范围就只有这一条。
 
 投递状态有四态加一个 `awaiting` 标志：`awaiting`（载荷未定稿——模型被要求规范化，或还缺回答上下文——因此绝不发送）、`pending`（尚未尝试）、`sent`（append 期间崩溃，结果未知，永不自动 commit 或重发）、`commit-pending`（append 已确认，只有 commit 失败）、`uncertain`（append 可能已落库）。只有 `pending` 或 `commit-pending` 会走到 commit，因此不可能把一个空会话归档后当成写入成功。
 

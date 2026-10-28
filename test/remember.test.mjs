@@ -17,7 +17,7 @@ const cfg = (overrides = {}) => configuration({ enabled: true, ...overrides }, e
 async function setup(t, overrides = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'magpie-ov-remember-'));
   const calls = []; const batches = []; const commits = [];
-  const control = { dropBatch: false, failCommit: false, search: null };
+  const control = { dropBatch: false, failCommit: false, skipCommit: false, search: null };
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -33,7 +33,11 @@ async function setup(t, overrides = {}) {
     } else if (req.url.endsWith('/commit')) {
       commits.push({ path: req.url, body });
       if (control.failCommit) { res.writeHead(500); res.end('{}'); return; }
-      result = { task_id: `task-${commits.length}` };
+      if (control.skipCommit) {
+        result = { status: 'skipped', task_id: null, reason: 'no_messages', archived: false };
+      } else {
+        result = { task_id: `task-${commits.length}` };
+      }
     }
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ status: 'ok', result }));
@@ -323,7 +327,8 @@ test('assisted candidates wait for a human decision', async t => {
 test('the explicit CLI write uses the same two calls without any local state', async t => {
   const x = await setup(t);
   const result = await rememberNow(x.options, '  以后都用中文回答  ', { env });
-  assert.deepEqual(result, { taskId: 'task-1' });
+  assert.equal(result.taskId, 'task-1');
+  assert.equal(result.skipped, false);
   assert.equal(x.batches.length, 1);
   assert.match(x.batches[0].body.messages[0].content, /content: 以后都用中文回答$/);
   await assert.rejects(() => rememberNow(x.options, 'password: hunter2', { env }), /statement rejected/);
@@ -1034,4 +1039,28 @@ test('the state directory is synced after a rename on POSIX', async t => {
     await save({ durable: true });
   });
   assert.ok(opened.includes(directory), 'the containing directory is opened for a sync after the rename');
+});
+
+test('a commit that archives nothing right after the append is not reported as written', async t => {
+  const x = await setup(t);
+  x.control.skipCommit = true;
+  const ctx = x.context();
+  await x.plugin.onRequest(x.body('/记住 以后都用中文回答'), ctx);
+  await x.plugin.onResponse(x.reply('好的'), ctx);
+  assert.equal(x.batches.length, 1, 'the append was attempted');
+  const [state] = await x.states();
+  assert.equal(state.outbox.length, 1, 'the event is kept for review');
+  assert.equal(state.outbox[0].status, 'uncertain');
+  assert.deepEqual(state.remembered, [], 'no receipt is recorded for a write that never landed');
+  assert.ok(x.reports.includes('remember-uncertain'));
+
+  // A recovery commit (commit-pending) that finds nothing left to archive is a
+  // success: that is what a re-commit after a crash looks like.
+  const file = join(x.directory, (await readdir(x.directory)).filter(n => n.endsWith('.json'))[0]);
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  saved.outbox[0].status = 'commit-pending';
+  await writeFile(file, JSON.stringify(saved));
+  x.control.skipCommit = false;
+  const drained = await drain(x.options, { env });
+  assert.equal(drained.remembered, 1, 'a commit-pending retry that finds no messages is accepted');
 });

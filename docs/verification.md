@@ -7,8 +7,8 @@ Last updated: 2026-10-27.
 | Check | Environment | Result |
 | --- | --- | --- |
 | `npm run check` | Node.js 24.12.0, Windows 11 | Syntax and Magpie manifest checks passed. |
-| `npm test` | Node.js 24.12.0, Windows 11 | 100 passed, 0 failed, 1 skipped on Windows. |
-| `bun test test/` | Bun 1.4.4, Windows 11 | 100 passed, 0 failed, 1 skipped on Windows. |
+| `npm test` | Node.js 24.12.0, Windows 11 | 101 passed, 0 failed, 1 skipped on Windows. |
+| `bun test test/` | Bun 1.4.4, Windows 11 | 101 passed, 0 failed, 1 skipped on Windows. |
 
 The suite uses real HTTP sockets against a mock OpenViking API and captured
 protocol shapes. It covers immutable protocol handling, byte-identical replay
@@ -18,7 +18,7 @@ exclusive locks and stale-lock recovery, transient filesystem retries, lazy
 state pruning, timeout and redirect behaviour, capture acknowledgement and
 mismatch reporting, regeneration, idle draining and ambiguous-write suppression.
 
-Remember coverage (`test/remember.test.mjs`, 60 tests): command and bare-command
+Remember coverage (`test/remember.test.mjs`, 61 tests): command and bare-command
 detection with a previous-turn fallback, anchored-pattern candidates, secret and
 sensitive-identifier refusal, an assertion that the injected control instruction
 contains no CJK (the English-only i18n guard), wrapper-escape of untrusted text,
@@ -27,7 +27,7 @@ the locale-neutral payload header, one throw-away session per statement, no reca
 and no capture on a remember turn, content deduplication, request retries that
 keep a single event, model normalisation and raw fallback, uncertain-append
 suppression, commit-only retry, candidate approval through the CLI, the
-context-free `cli.mjs remember` write, stray-marker reporting, and the budget hint. Review regressions add the crash window (`sent` is never committed), `awaiting` finalisation and idle fallback/drop, payload immutability after an attempted append, resolution guards, candidate release by an explicit command, tool-continuation classification, answer-context privacy, conversation-scoped sessions, CLI opt-in and string Responses input; the capture-isolation test now also proves that ordinary turns are still exported. A second review pass adds v0.2.0 legacy receipt and event recovery, remember-off continuation, late-callback handling, candidate regeneration and tool-step awaiting, plus branch-switch reclassification, marker-less tool steps, cached markers, persisted candidate normalisation, classification durability across branch switches, mode-independent capture exclusion, idle recovery from a cached entry, legacy answer filtering, classification retention and the shared anchor bound. An independent adversarial audit round adds the full-outbox outcome, guarded and unambiguous resolution, credential-shape coverage, answer bounds, prune budget and foreign-binding aging, script-agnostic command detection, inactivity-based idle handling, stored-payload status codes and durable append checkpoints.
+context-free `cli.mjs remember` write, stray-marker reporting, and the budget hint. Review regressions add the crash window (`sent` is never committed), `awaiting` finalisation and idle fallback/drop, payload immutability after an attempted append, resolution guards, candidate release by an explicit command, tool-continuation classification, answer-context privacy, conversation-scoped sessions, CLI opt-in and string Responses input; the capture-isolation test now also proves that ordinary turns are still exported. A second review pass adds v0.2.0 legacy receipt and event recovery, remember-off continuation, late-callback handling, candidate regeneration and tool-step awaiting, plus branch-switch reclassification, marker-less tool steps, cached markers, persisted candidate normalisation, classification durability across branch switches, mode-independent capture exclusion, idle recovery from a cached entry, legacy answer filtering, classification retention and the shared anchor bound. An independent adversarial audit round adds the full-outbox outcome, guarded and unambiguous resolution, credential-shape coverage, answer bounds, prune budget and foreign-binding aging, script-agnostic command detection, inactivity-based idle handling, stored-payload status codes and durable append checkpoints, plus a commit that archives nothing after a successful-looking append. A live run inside a real Magpie host confirmed recall, the privacy gate, the normalising write and server-side extraction.
 
 One assertion in `test/integration.test.mjs` checks that state files are created
 `0600`. Windows has no POSIX mode bits (Node and Bun both report `0o666`), so it
